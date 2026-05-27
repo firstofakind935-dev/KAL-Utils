@@ -67,13 +67,10 @@ class Music(commands.Cog):
         if not SOUND_PATH.exists():
             return await ctx.send(f"Audio file not found at `{SOUND_PATH}`.")
 
-        await ctx.send(f"Debug: ffmpeg=`{FFMPEG_EXE}` | file=`{SOUND_PATH}`")
-
         try:
             import traceback
-            source = discord.PCMVolumeTransformer(
-                discord.FFmpegPCMAudio(str(SOUND_PATH), **FFMPEG_OPTIONS),
-                volume=0.5,
+            source = await discord.FFmpegOpusAudio.from_probe(
+                str(SOUND_PATH), executable=FFMPEG_EXE
             )
 
             def after(error):
@@ -84,6 +81,7 @@ class Music(commands.Cog):
             vc.play(source, after=after)
             await ctx.send("Playing airport sound!")
         except Exception as e:
+            import traceback
             await ctx.send(f"Playback error: `{type(e).__name__}: {e}`\n```{traceback.format_exc()[-500:]}```")
 
     @commands.command()
