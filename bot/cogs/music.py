@@ -68,24 +68,34 @@ class Music(commands.Cog):
         else:
             vc = await target_channel.connect()
 
-        async with ctx.typing():
+        await ctx.send("Fetching audio, one moment...")
+        try:
             loop = asyncio.get_event_loop()
             with yt_dlp.YoutubeDL(YDL_OPTIONS) as ydl:
                 info = await loop.run_in_executor(
                     None, lambda: ydl.extract_info(AIRPORT_URL, download=False)
                 )
-            stream_url = info["url"]
+            stream_url = info.get("url")
+            if not stream_url:
+                return await ctx.send("Could not extract audio URL from YouTube.")
+        except Exception as e:
+            return await ctx.send(f"yt-dlp error: `{e}`")
 
-        source = discord.PCMVolumeTransformer(
-            discord.FFmpegPCMAudio(stream_url, **FFMPEG_OPTIONS),
-            volume=0.5,
-        )
+        try:
+            source = discord.PCMVolumeTransformer(
+                discord.FFmpegPCMAudio(stream_url, **FFMPEG_OPTIONS),
+                volume=0.5,
+            )
 
-        def after(error):
-            asyncio.run_coroutine_threadsafe(vc.disconnect(), self.bot.loop)
+            def after(error):
+                if error:
+                    print(f"[Music] Playback error: {error}")
+                asyncio.run_coroutine_threadsafe(vc.disconnect(), self.bot.loop)
 
-        vc.play(source, after=after)
-        await ctx.send("Playing airport sound!")
+            vc.play(source, after=after)
+            await ctx.send("Playing airport sound!")
+        except Exception as e:
+            await ctx.send(f"Playback error: `{e}`")
 
     @commands.command()
     async def stopsound(self, ctx: commands.Context):
