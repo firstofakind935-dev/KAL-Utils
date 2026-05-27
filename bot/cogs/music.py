@@ -1,19 +1,13 @@
 import asyncio
+import os
+from pathlib import Path
 
 import discord
-import yt_dlp
 from discord.ext import commands
 
-AIRPORT_URL = "https://www.youtube.com/watch?v=zQG5OdBnYfA"
-
-YDL_OPTIONS = {
-    "format": "bestaudio/best",
-    "quiet": True,
-    "no_warnings": True,
-}
+SOUND_PATH = Path(__file__).parent.parent / "sounds" / "airport.mp3"
 
 FFMPEG_OPTIONS = {
-    "before_options": "-reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 5",
     "options": "-vn",
 }
 
@@ -68,22 +62,12 @@ class Music(commands.Cog):
         else:
             vc = await target_channel.connect()
 
-        await ctx.send("Fetching audio, one moment...")
-        try:
-            loop = asyncio.get_event_loop()
-            with yt_dlp.YoutubeDL(YDL_OPTIONS) as ydl:
-                info = await loop.run_in_executor(
-                    None, lambda: ydl.extract_info(AIRPORT_URL, download=False)
-                )
-            stream_url = info.get("url")
-            if not stream_url:
-                return await ctx.send("Could not extract audio URL from YouTube.")
-        except Exception as e:
-            return await ctx.send(f"yt-dlp error: `{e}`")
+        if not SOUND_PATH.exists():
+            return await ctx.send("Audio file not found. Add `airport.mp3` to `bot/sounds/`.")
 
         try:
             source = discord.PCMVolumeTransformer(
-                discord.FFmpegPCMAudio(stream_url, **FFMPEG_OPTIONS),
+                discord.FFmpegPCMAudio(str(SOUND_PATH), **FFMPEG_OPTIONS),
                 volume=0.5,
             )
 
