@@ -68,9 +68,12 @@ class Music(commands.Cog):
             return await ctx.send(f"Audio file not found at `{SOUND_PATH}`.")
 
         try:
-            import traceback
-            source = await discord.FFmpegOpusAudio.from_probe(
-                str(SOUND_PATH), executable=FFMPEG_EXE
+            source = discord.FFmpegOpusAudio(
+                str(SOUND_PATH),
+                executable=FFMPEG_EXE,
+                bitrate=128,
+                before_options="-nostdin",
+                options="-vn -af aresample=48000",
             )
 
             def after(error):
