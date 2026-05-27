@@ -1,13 +1,15 @@
 import asyncio
-import os
 from pathlib import Path
 
 import discord
+import imageio_ffmpeg
 from discord.ext import commands
 
 SOUND_PATH = Path(__file__).resolve().parent.parent / "sounds" / "airport.mp3"
+FFMPEG_EXE = imageio_ffmpeg.get_ffmpeg_exe()
 
 FFMPEG_OPTIONS = {
+    "executable": FFMPEG_EXE,
     "options": "-vn",
 }
 
