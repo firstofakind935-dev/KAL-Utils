@@ -24,16 +24,49 @@ class Music(commands.Cog):
 
     @commands.command()
     async def airportsound(self, ctx: commands.Context):
-        """Play the airport sound in your voice channel."""
-        if not ctx.author.voice:
-            return await ctx.send("You need to be in a voice channel first.")
-
-        vc = ctx.voice_client
-        if vc and vc.is_playing():
+        """Play the airport sound — bot will ask which voice channel to use."""
+        if ctx.voice_client and ctx.voice_client.is_playing():
             return await ctx.send("Already playing.")
 
-        if not vc:
-            vc = await ctx.author.voice.channel.connect()
+        # List available voice channels
+        voice_channels = ctx.guild.voice_channels
+        if not voice_channels:
+            return await ctx.send("No voice channels found in this server.")
+
+        lines = [f"`{i+1}.` {vc.name}" for i, vc in enumerate(voice_channels)]
+        await ctx.send(
+            f"Which voice channel should I play in?\n" + "\n".join(lines) +
+            "\n\nReply with the number or channel name. (You have 30 seconds)"
+        )
+
+        def check(m):
+            return m.author == ctx.author and m.channel == ctx.channel
+
+        try:
+            reply = await self.bot.wait_for("message", check=check, timeout=30.0)
+        except asyncio.TimeoutError:
+            return await ctx.send("Timed out. Use `!airportsound` again when ready.")
+
+        # Match by number or name
+        target_channel = None
+        if reply.content.isdigit():
+            idx = int(reply.content) - 1
+            if 0 <= idx < len(voice_channels):
+                target_channel = voice_channels[idx]
+        else:
+            name = reply.content.strip().lower()
+            target_channel = discord.utils.find(
+                lambda c: c.name.lower() == name, voice_channels
+            )
+
+        if not target_channel:
+            return await ctx.send("Couldn't find that channel. Use `!airportsound` again.")
+
+        vc = ctx.voice_client
+        if vc:
+            await vc.move_to(target_channel)
+        else:
+            vc = await target_channel.connect()
 
         async with ctx.typing():
             loop = asyncio.get_event_loop()
