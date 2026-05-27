@@ -5,7 +5,7 @@ from pathlib import Path
 import discord
 from discord.ext import commands
 
-SOUND_PATH = Path(__file__).parent.parent / "sounds" / "airport.mp3"
+SOUND_PATH = Path(__file__).resolve().parent.parent / "sounds" / "airport.mp3"
 
 FFMPEG_OPTIONS = {
     "options": "-vn",
@@ -63,7 +63,7 @@ class Music(commands.Cog):
             vc = await target_channel.connect()
 
         if not SOUND_PATH.exists():
-            return await ctx.send("Audio file not found. Add `airport.mp3` to `bot/sounds/`.")
+            return await ctx.send(f"Audio file not found at `{SOUND_PATH}`.")
 
         try:
             source = discord.PCMVolumeTransformer(
