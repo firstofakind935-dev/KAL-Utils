@@ -53,6 +53,15 @@ class KALBot(commands.Bot):
             await ctx.send(f"An error occurred: `{error}`")
 
 
+if not discord.opus.is_loaded():
+    for lib in ("libopus.so.0", "libopus.so", "opus"):
+        try:
+            discord.opus.load_opus(lib)
+            print(f"Loaded opus: {lib}")
+            break
+        except Exception:
+            continue
+
 bot = KALBot(command_prefix="!", intents=intents)
 
 
