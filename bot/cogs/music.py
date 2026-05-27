@@ -84,8 +84,7 @@ class Music(commands.Cog):
             vc.play(source, after=after)
             await ctx.send("Playing airport sound!")
         except Exception as e:
-            import traceback
-            await ctx.send(f"Playback error: `{type(e).__name__}: {e}`\n```{traceback.format_exc()[-500:]}```")
+            await ctx.send(f"Playback error: `{e}`")
 
     @commands.command()
     async def stopsound(self, ctx: commands.Context):
