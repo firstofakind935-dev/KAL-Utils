@@ -45,8 +45,12 @@ class KALBot(commands.Bot):
             await ctx.send(f"Invalid argument. Check `!help {ctx.command}`.")
         elif isinstance(error, commands.CommandNotFound):
             pass
+        elif isinstance(error, commands.CommandInvokeError):
+            print(f"Error in command {ctx.command}: {error.original}")
+            await ctx.send(f"Something went wrong: `{error.original}`")
         else:
-            raise error
+            print(f"Unhandled error: {error}")
+            await ctx.send(f"An error occurred: `{error}`")
 
 
 bot = KALBot(command_prefix="!", intents=intents)
