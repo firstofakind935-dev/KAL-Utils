@@ -3,71 +3,35 @@ from pathlib import Path
 
 import discord
 import imageio_ffmpeg
+from discord import app_commands
 from discord.ext import commands
 
 SOUND_PATH = Path(__file__).resolve().parent.parent / "sounds" / "airport.mp3"
 FFMPEG_EXE = imageio_ffmpeg.get_ffmpeg_exe()
-
-FFMPEG_OPTIONS = {
-    "executable": FFMPEG_EXE,
-    "options": "-vn",
-}
 
 
 class Music(commands.Cog):
     def __init__(self, bot: commands.Bot):
         self.bot = bot
 
-    @commands.command()
-    async def airportsound(self, ctx: commands.Context):
-        """Play the airport sound — bot will ask which voice channel to use."""
-        if ctx.voice_client and ctx.voice_client.is_playing():
-            return await ctx.send("Already playing.")
+    @app_commands.command(name="airportsound", description="Play the airport ambience sound in a voice channel")
+    @app_commands.describe(channel="The voice channel to play the sound in")
+    async def airportsound(self, interaction: discord.Interaction, channel: discord.VoiceChannel):
+        await interaction.response.defer()
 
-        # List available voice channels
-        voice_channels = ctx.guild.voice_channels
-        if not voice_channels:
-            return await ctx.send("No voice channels found in this server.")
-
-        lines = [f"`{i+1}.` {vc.name}" for i, vc in enumerate(voice_channels)]
-        await ctx.send(
-            f"Which voice channel should I play in?\n" + "\n".join(lines) +
-            "\n\nReply with the number or channel name. (You have 30 seconds)"
-        )
-
-        def check(m):
-            return m.author == ctx.author and m.channel == ctx.channel
-
-        try:
-            reply = await self.bot.wait_for("message", check=check, timeout=30.0)
-        except asyncio.TimeoutError:
-            return await ctx.send("Timed out. Use `!airportsound` again when ready.")
-
-        # Match by number or name
-        target_channel = None
-        if reply.content.isdigit():
-            idx = int(reply.content) - 1
-            if 0 <= idx < len(voice_channels):
-                target_channel = voice_channels[idx]
-        else:
-            name = reply.content.strip().lower()
-            target_channel = discord.utils.find(
-                lambda c: c.name.lower() == name, voice_channels
-            )
-
-        if not target_channel:
-            return await ctx.send("Couldn't find that channel. Use `!airportsound` again.")
-
-        vc = ctx.voice_client
-        if vc:
-            await vc.move_to(target_channel)
-        else:
-            vc = await target_channel.connect()
+        vc = interaction.guild.voice_client
+        if vc and vc.is_playing():
+            return await interaction.followup.send("Already playing.")
 
         if not SOUND_PATH.exists():
-            return await ctx.send(f"Audio file not found at `{SOUND_PATH}`.")
+            return await interaction.followup.send("Audio file not found. Contact an admin.")
 
         try:
+            if vc:
+                await vc.move_to(channel)
+            else:
+                vc = await channel.connect()
+
             source = discord.FFmpegOpusAudio(
                 str(SOUND_PATH),
                 executable=FFMPEG_EXE,
@@ -82,19 +46,19 @@ class Music(commands.Cog):
                 asyncio.run_coroutine_threadsafe(vc.disconnect(), self.bot.loop)
 
             vc.play(source, after=after)
-            await ctx.send("Playing airport sound!")
+            await interaction.followup.send(f"Playing airport sound in **{channel.name}**!")
         except Exception as e:
-            await ctx.send(f"Playback error: `{e}`")
+            await interaction.followup.send(f"Playback error: `{e}`")
 
-    @commands.command()
-    async def stopsound(self, ctx: commands.Context):
-        """Stop the airport sound and disconnect."""
-        if ctx.voice_client:
-            ctx.voice_client.stop()
-            await ctx.voice_client.disconnect()
-            await ctx.send("Stopped.")
+    @app_commands.command(name="stopsound", description="Stop the airport sound and disconnect")
+    async def stopsound(self, interaction: discord.Interaction):
+        vc = interaction.guild.voice_client
+        if vc:
+            vc.stop()
+            await vc.disconnect()
+            await interaction.response.send_message("Stopped.")
         else:
-            await ctx.send("Nothing is playing.")
+            await interaction.response.send_message("Nothing is playing.")
 
 
 async def setup(bot: commands.Bot):

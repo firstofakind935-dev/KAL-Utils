@@ -1,6 +1,7 @@
 import os
 
 import discord
+from discord import app_commands
 from discord.ext import commands
 
 
@@ -17,7 +18,6 @@ class Welcome(commands.Cog):
         channel = member.guild.get_channel(self.channel_id)
         if not channel:
             return
-
         embed = discord.Embed(
             title=f"Welcome to {member.guild.name}!",
             description=(
@@ -31,13 +31,13 @@ class Welcome(commands.Cog):
             embed.set_footer(text=f"Joined {member.joined_at.strftime('%B %d, %Y')}")
         await channel.send(embed=embed)
 
-    @commands.command()
-    @commands.has_permissions(administrator=True)
-    async def setwelcome(self, ctx: commands.Context):
-        """Show instructions for setting the welcome channel."""
-        await ctx.send(
+    @app_commands.command(name="setwelcome", description="Show instructions to set the welcome channel")
+    @app_commands.default_permissions(administrator=True)
+    async def setwelcome(self, interaction: discord.Interaction):
+        await interaction.response.send_message(
             f"Add this to your `.env` and restart the bot:\n"
-            f"```\nWELCOME_CHANNEL_ID={ctx.channel.id}\n```"
+            f"```\nWELCOME_CHANNEL_ID={interaction.channel_id}\n```",
+            ephemeral=True,
         )
 
 

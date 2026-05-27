@@ -4,10 +4,10 @@ import sys
 from pathlib import Path
 
 import discord
+from discord import app_commands
 from discord.ext import commands
 from dotenv import load_dotenv
 
-# Allow imports like `from db.database import ...` and `from cogs.music import ...`
 sys.path.insert(0, str(Path(__file__).parent))
 
 load_dotenv(Path(__file__).parent.parent / ".env")
@@ -31,44 +31,33 @@ class KALBot(commands.Bot):
         for cog in COGS:
             await self.load_extension(cog)
             print(f"  Loaded: {cog}")
+        await self.tree.sync()
+        print("  Synced slash commands")
 
     async def on_ready(self):
         print(f"\nLogged in as {self.user} (ID: {self.user.id})")
         print(f"Serving {len(self.guilds)} guild(s)\n")
 
-    async def on_command_error(self, ctx: commands.Context, error):
-        if isinstance(error, commands.MissingPermissions):
-            await ctx.send("You don't have permission to use that command.")
-        elif isinstance(error, commands.MissingRequiredArgument):
-            await ctx.send(f"Missing argument: `{error.param.name}`. Check `!help {ctx.command}`.")
-        elif isinstance(error, commands.BadArgument):
-            await ctx.send(f"Invalid argument. Check `!help {ctx.command}`.")
-        elif isinstance(error, commands.CommandNotFound):
-            pass
-        elif isinstance(error, commands.CommandInvokeError):
-            print(f"Error in command {ctx.command}: {error.original}")
-            await ctx.send(f"Something went wrong: `{error.original}`")
+    async def on_app_command_error(
+        self, interaction: discord.Interaction, error: app_commands.AppCommandError
+    ):
+        msg = "You don't have permission to use that command." \
+            if isinstance(error, app_commands.MissingPermissions) \
+            else f"An error occurred: `{error}`"
+        if interaction.response.is_done():
+            await interaction.followup.send(msg, ephemeral=True)
         else:
-            print(f"Unhandled error: {error}")
-            await ctx.send(f"An error occurred: `{error}`")
+            await interaction.response.send_message(msg, ephemeral=True)
 
 
-if not discord.opus.is_loaded():
-    for lib in ("libopus.so.0", "libopus.so", "opus"):
-        try:
-            discord.opus.load_opus(lib)
-            print(f"Loaded opus: {lib}")
-            break
-        except Exception:
-            continue
-
-bot = KALBot(command_prefix="!", intents=intents)
+bot = KALBot(command_prefix=commands.when_mentioned, intents=intents)
 
 
-@bot.command()
-async def ping(ctx: commands.Context):
-    """Check the bot's latency."""
-    await ctx.send(f"Pong! Latency: **{round(bot.latency * 1000)}ms**")
+@bot.tree.command(name="ping", description="Check the bot's latency")
+async def ping(interaction: discord.Interaction):
+    await interaction.response.send_message(
+        f"Pong! Latency: **{round(bot.latency * 1000)}ms**"
+    )
 
 
 async def main():
