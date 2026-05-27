@@ -38,6 +38,18 @@ class KALBot(commands.Bot):
         print(f"\nLogged in as {self.user} (ID: {self.user.id})")
         print(f"Serving {len(self.guilds)} guild(s)\n")
 
+    async def on_command_error(self, ctx: commands.Context, error):
+        if isinstance(error, commands.MissingPermissions):
+            await ctx.send("You don't have permission to use that command.")
+        elif isinstance(error, commands.MissingRequiredArgument):
+            await ctx.send(f"Missing argument: `{error.param.name}`. Check `/help` or `!help`.")
+        elif isinstance(error, commands.BadArgument):
+            await ctx.send(f"Invalid argument. Check `/help` or `!help`.")
+        elif isinstance(error, commands.CommandNotFound):
+            pass
+        elif isinstance(error, commands.CommandInvokeError):
+            await ctx.send(f"Something went wrong: `{error.original}`")
+
     async def on_app_command_error(
         self, interaction: discord.Interaction, error: app_commands.AppCommandError
     ):
@@ -50,14 +62,13 @@ class KALBot(commands.Bot):
             await interaction.response.send_message(msg, ephemeral=True)
 
 
-bot = KALBot(command_prefix=commands.when_mentioned, intents=intents)
+bot = KALBot(command_prefix="!", intents=intents)
 
 
-@bot.tree.command(name="ping", description="Check the bot's latency")
-async def ping(interaction: discord.Interaction):
-    await interaction.response.send_message(
-        f"Pong! Latency: **{round(bot.latency * 1000)}ms**"
-    )
+@bot.hybrid_command(name="ping", description="Check the bot's latency")
+async def ping(ctx: commands.Context):
+    """Check the bot's latency."""
+    await ctx.send(f"Pong! Latency: **{round(bot.latency * 1000)}ms**")
 
 
 async def main():

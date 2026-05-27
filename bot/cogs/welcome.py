@@ -31,12 +31,14 @@ class Welcome(commands.Cog):
             embed.set_footer(text=f"Joined {member.joined_at.strftime('%B %d, %Y')}")
         await channel.send(embed=embed)
 
-    @app_commands.command(name="setwelcome", description="Show instructions to set the welcome channel")
+    @commands.hybrid_command(name="setwelcome", description="Show instructions to set the welcome channel")
+    @commands.has_permissions(administrator=True)
     @app_commands.default_permissions(administrator=True)
-    async def setwelcome(self, interaction: discord.Interaction):
-        await interaction.response.send_message(
+    async def setwelcome(self, ctx: commands.Context):
+        """Show welcome channel setup instructions."""
+        await ctx.send(
             f"Add this to your `.env` and restart the bot:\n"
-            f"```\nWELCOME_CHANNEL_ID={interaction.channel_id}\n```",
+            f"```\nWELCOME_CHANNEL_ID={ctx.channel.id}\n```",
             ephemeral=True,
         )
 
