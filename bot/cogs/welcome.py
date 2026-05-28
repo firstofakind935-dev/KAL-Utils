@@ -8,8 +8,7 @@ VERIFY_CHANNEL_ID = 1485862684300935319
 HELPDESK_CHANNEL_ID = 1499251791689416705
 BANNER_URL = os.getenv(
     "BANNER_URL",
-    "https://media.discordapp.net/attachments/1402619298618540093/1505494648830038036/"
-    "file_00000000dcb47206bb98e9594c22843f.png?format=webp&quality=lossless"
+    "https://github.com/user-attachments/assets/0249e2be-6ac7-4336-b878-94f0988e036a"
 )
 
 
