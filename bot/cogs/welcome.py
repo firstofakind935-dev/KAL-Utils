@@ -60,6 +60,14 @@ class Welcome(commands.Cog):
             embed=embed,
         )
 
+    @commands.hybrid_command(name="testwelcome", description="Test the welcome message")
+    @commands.has_permissions(administrator=True)
+    @app_commands.default_permissions(administrator=True)
+    async def testwelcome(self, ctx: commands.Context):
+        """Send a test welcome message for the current user."""
+        await self.on_member_join(ctx.author)
+        await ctx.send("Test welcome sent!", ephemeral=True)
+
     @commands.hybrid_command(name="setwelcome", description="Show instructions to set the welcome channel")
     @commands.has_permissions(administrator=True)
     @app_commands.default_permissions(administrator=True)
