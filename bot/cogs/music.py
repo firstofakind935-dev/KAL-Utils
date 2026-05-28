@@ -27,6 +27,15 @@ FLIGHT_SEQUENCE = [
     ("enginehum",   "Engine Hum"),
 ]
 
+FLIGHT_SEQUENCE_PAUSE = [
+    ("airport",     "Airport Ambience"),
+    ("boarding",    "Korean Air Boarding Music"),
+    ("anywhere",    "Korean Air – Anywhere is Possible"),
+    ("pause:300",   "Safety Briefing (5-Minute Pause)"),
+    ("enginestart", "Engine Start"),
+    ("enginehum",   "Engine Hum"),
+]
+
 
 def make_source(path: Path):
     return discord.FFmpegOpusAudio(
@@ -42,30 +51,38 @@ class Music(commands.Cog):
     def __init__(self, bot: commands.Bot):
         self.bot = bot
 
-    async def _play_sequence(self, vc: discord.VoiceClient, index: int, channel: discord.TextChannel):
-        """Recursively plays the flight sequence from the given index."""
-        if index >= len(FLIGHT_SEQUENCE):
+    async def _play_sequence(self, vc: discord.VoiceClient, index: int, channel: discord.TextChannel, sequence: list):
+        if index >= len(sequence):
             await channel.send("✈️ Flight sequence complete. Safe travels!")
             await vc.disconnect()
             return
 
-        sound_key, label = FLIGHT_SEQUENCE[index]
-        path = SOUND_FILES.get(sound_key)
+        sound_key, label = sequence[index]
 
+        # Handle timed pause
+        if sound_key.startswith("pause:"):
+            duration = int(sound_key.split(":")[1])
+            minutes = duration // 60
+            await channel.send(f"⏸️ **{label}** — resuming in {minutes} minute{'s' if minutes != 1 else ''}...")
+            await asyncio.sleep(duration)
+            await self._play_sequence(vc, index + 1, channel, sequence)
+            return
+
+        path = SOUND_FILES.get(sound_key)
         if not path or not path.exists():
-            # Skip missing sounds silently and move to next
-            await self._play_sequence(vc, index + 1, channel)
+            await self._play_sequence(vc, index + 1, channel, sequence)
             return
 
         source = make_source(path)
-        total = sum(1 for k, _ in FLIGHT_SEQUENCE if SOUND_FILES.get(k) and SOUND_FILES[k].exists())
-        current = sum(1 for i, (k, _) in enumerate(FLIGHT_SEQUENCE) if i <= index and SOUND_FILES.get(k) and SOUND_FILES[k].exists())
+        playable = [(k, l) for k, l in sequence if not k.startswith("pause:") and SOUND_FILES.get(k) and SOUND_FILES[k].exists()]
+        total = len(playable) + sum(1 for k, _ in sequence if k.startswith("pause:"))
+        current = index + 1
 
         def after(error):
             if error:
                 print(f"[Music] Sequence error at {label}: {error}")
             asyncio.run_coroutine_threadsafe(
-                self._play_sequence(vc, index + 1, channel), self.bot.loop
+                self._play_sequence(vc, index + 1, channel, sequence), self.bot.loop
             )
 
         vc.play(source, after=after)
@@ -73,10 +90,9 @@ class Music(commands.Cog):
 
     # ── Flight sequence ──────────────────────────────────────────────────────
 
-    @commands.hybrid_command(name="flight", description="Play the full Korean Air flight sequence")
+    @commands.hybrid_command(name="flight", description="Play the full Korean Air flight sequence with safety briefing")
     @app_commands.describe(channel="The voice channel to play in")
     async def flight(self, ctx: commands.Context, channel: discord.VoiceChannel):
-        """Start the full flight sound sequence."""
         await ctx.defer()
 
         vc = ctx.guild.voice_client
@@ -89,7 +105,24 @@ class Music(commands.Cog):
             vc = await channel.connect()
 
         await ctx.send(f"✈️ Starting flight sequence in **{channel.name}**!")
-        await self._play_sequence(vc, 0, ctx.channel)
+        await self._play_sequence(vc, 0, ctx.channel, FLIGHT_SEQUENCE)
+
+    @commands.hybrid_command(name="flightpause", description="Flight sequence with a 5-minute pause in place of the safety briefing")
+    @app_commands.describe(channel="The voice channel to play in")
+    async def flightpause(self, ctx: commands.Context, channel: discord.VoiceChannel):
+        await ctx.defer()
+
+        vc = ctx.guild.voice_client
+        if vc and vc.is_playing():
+            return await ctx.send("Already playing. Use `/stopsound` first.")
+
+        if vc:
+            await vc.move_to(channel)
+        else:
+            vc = await channel.connect()
+
+        await ctx.send(f"✈️ Starting flight sequence (with pause) in **{channel.name}**!")
+        await self._play_sequence(vc, 0, ctx.channel, FLIGHT_SEQUENCE_PAUSE)
 
     # ── Individual sounds ────────────────────────────────────────────────────
 
