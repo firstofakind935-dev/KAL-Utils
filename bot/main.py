@@ -31,8 +31,6 @@ class KALBot(commands.Bot):
         for cog in COGS:
             await self.load_extension(cog)
             print(f"  Loaded: {cog}")
-        await self.tree.sync()
-        print("  Synced slash commands")
 
     async def on_ready(self):
         print(f"\nLogged in as {self.user} (ID: {self.user.id})")
