@@ -143,6 +143,13 @@ class Music(commands.Cog):
 
     @commands.hybrid_command(name="stopsound", description="Stop playback and disconnect")
     async def stopsound(self, ctx: commands.Context):
+        await self._stop(ctx)
+
+    @commands.hybrid_command(name="stop", description="Stop playback and disconnect")
+    async def stop(self, ctx: commands.Context):
+        await self._stop(ctx)
+
+    async def _stop(self, ctx: commands.Context):
         vc = ctx.guild.voice_client
         if vc:
             vc.stop()
