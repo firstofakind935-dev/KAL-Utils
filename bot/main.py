@@ -17,6 +17,14 @@ COGS = [
     "cogs.economy",
     "cogs.moderation",
     "cogs.welcome",
+    "cogs.leveling",
+    "cogs.counting",
+    "cogs.tickets",
+    "cogs.autodelete",
+    "cogs.reactionroles",
+    "cogs.serverstats",
+    "cogs.utility",
+    "cogs.automod",
 ]
 
 intents = discord.Intents.default()
