@@ -50,6 +50,7 @@ def make_source(path: Path):
 class Music(commands.Cog):
     def __init__(self, bot: commands.Bot):
         self.bot = bot
+        self._pause_task: asyncio.Task | None = None
 
     async def _play_sequence(self, vc: discord.VoiceClient, index: int, channel: discord.TextChannel, sequence: list):
         if index >= len(sequence):
@@ -64,7 +65,13 @@ class Music(commands.Cog):
             duration = int(sound_key.split(":")[1])
             minutes = duration // 60
             await channel.send(f"⏸️ **{label}** — resuming in {minutes} minute{'s' if minutes != 1 else ''}...")
-            await asyncio.sleep(duration)
+            self._pause_task = asyncio.ensure_future(asyncio.sleep(duration))
+            try:
+                await self._pause_task
+            except asyncio.CancelledError:
+                pass
+            finally:
+                self._pause_task = None
             await self._play_sequence(vc, index + 1, channel, sequence)
             return
 
@@ -74,8 +81,7 @@ class Music(commands.Cog):
             return
 
         source = make_source(path)
-        playable = [(k, l) for k, l in sequence if not k.startswith("pause:") and SOUND_FILES.get(k) and SOUND_FILES[k].exists()]
-        total = len(playable) + sum(1 for k, _ in sequence if k.startswith("pause:"))
+        total = len(sequence)
         current = index + 1
 
         def after(error):
@@ -97,7 +103,7 @@ class Music(commands.Cog):
 
         vc = ctx.guild.voice_client
         if vc and vc.is_playing():
-            return await ctx.send("Already playing. Use `/stopsound` first.")
+            return await ctx.send("Already playing. Use `/stop` first.")
 
         if vc:
             await vc.move_to(channel)
@@ -114,7 +120,7 @@ class Music(commands.Cog):
 
         vc = ctx.guild.voice_client
         if vc and vc.is_playing():
-            return await ctx.send("Already playing. Use `/stopsound` first.")
+            return await ctx.send("Already playing. Use `/stop` first.")
 
         if vc:
             await vc.move_to(channel)
@@ -123,6 +129,42 @@ class Music(commands.Cog):
 
         await ctx.send(f"✈️ Starting flight sequence (with pause) in **{channel.name}**!")
         await self._play_sequence(vc, 0, ctx.channel, FLIGHT_SEQUENCE_PAUSE)
+
+    # ── Playback controls ────────────────────────────────────────────────────
+
+    @commands.hybrid_command(name="skip", description="Skip the current sound and play the next in the sequence")
+    async def skip(self, ctx: commands.Context):
+        vc = ctx.guild.voice_client
+        if not vc:
+            return await ctx.send("Nothing is playing.")
+
+        if vc.is_playing():
+            vc.stop()  # triggers the after callback → advances sequence
+            await ctx.send("⏭️ Skipped.")
+        elif self._pause_task and not self._pause_task.done():
+            self._pause_task.cancel()
+            await ctx.send("⏭️ Skipped pause.")
+        else:
+            await ctx.send("Nothing to skip.")
+
+    @commands.hybrid_command(name="stopsound", description="Stop playback and disconnect")
+    async def stopsound(self, ctx: commands.Context):
+        await self._stop(ctx)
+
+    @commands.hybrid_command(name="stop", description="Stop playback and disconnect")
+    async def stop(self, ctx: commands.Context):
+        await self._stop(ctx)
+
+    async def _stop(self, ctx: commands.Context):
+        vc = ctx.guild.voice_client
+        if vc:
+            if self._pause_task and not self._pause_task.done():
+                self._pause_task.cancel()
+            vc.stop()
+            await vc.disconnect()
+            await ctx.send("Stopped.")
+        else:
+            await ctx.send("Nothing is playing.")
 
     # ── Individual sounds ────────────────────────────────────────────────────
 
@@ -140,23 +182,6 @@ class Music(commands.Cog):
     @app_commands.describe(channel="The voice channel to play in")
     async def anywhere(self, ctx: commands.Context, channel: discord.VoiceChannel):
         await self._play_single(ctx, channel, "anywhere", "Korean Air – Anywhere is Possible")
-
-    @commands.hybrid_command(name="stopsound", description="Stop playback and disconnect")
-    async def stopsound(self, ctx: commands.Context):
-        await self._stop(ctx)
-
-    @commands.hybrid_command(name="stop", description="Stop playback and disconnect")
-    async def stop(self, ctx: commands.Context):
-        await self._stop(ctx)
-
-    async def _stop(self, ctx: commands.Context):
-        vc = ctx.guild.voice_client
-        if vc:
-            vc.stop()
-            await vc.disconnect()
-            await ctx.send("Stopped.")
-        else:
-            await ctx.send("Nothing is playing.")
 
     async def _play_single(self, ctx: commands.Context, channel: discord.VoiceChannel, sound_key: str, label: str):
         await ctx.defer()
