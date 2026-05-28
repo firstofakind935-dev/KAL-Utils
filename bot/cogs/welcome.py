@@ -1,11 +1,11 @@
 import os
 
+import aiosqlite
 import discord
 from discord import app_commands
 from discord.ext import commands
+from db.database import DB_PATH
 
-VERIFY_CHANNEL_ID = 1485862684300935319
-HELPDESK_CHANNEL_ID = 1499251791689416705
 BANNER_URL = os.getenv(
     "BANNER_URL",
     "https://github.com/user-attachments/assets/0249e2be-6ac7-4336-b878-94f0988e036a"
@@ -23,19 +23,40 @@ def ordinal(n: int) -> str:
 class Welcome(commands.Cog):
     def __init__(self, bot: commands.Bot):
         self.bot = bot
-        raw = os.getenv("WELCOME_CHANNEL_ID", "")
-        self.channel_id: int | None = int(raw) if raw.isdigit() else None
+
+    async def cog_load(self):
+        async with aiosqlite.connect(DB_PATH) as db:
+            await db.execute("""
+                CREATE TABLE IF NOT EXISTS welcome_config (
+                    guild_id INTEGER PRIMARY KEY,
+                    welcome_channel_id INTEGER,
+                    verify_channel_id INTEGER,
+                    helpdesk_channel_id INTEGER
+                )
+            """)
+            await db.commit()
+
+    async def get_config(self, guild_id: int):
+        async with aiosqlite.connect(DB_PATH) as db:
+            async with db.execute(
+                "SELECT welcome_channel_id, verify_channel_id, helpdesk_channel_id FROM welcome_config WHERE guild_id = ?",
+                (guild_id,)
+            ) as cur:
+                return await cur.fetchone()
 
     @commands.Cog.listener()
     async def on_member_join(self, member: discord.Member):
-        if not self.channel_id:
+        config = await self.get_config(member.guild.id)
+        if not config or not config[0]:
             return
-        channel = member.guild.get_channel(self.channel_id)
+
+        welcome_channel_id, verify_channel_id, helpdesk_channel_id = config
+        channel = member.guild.get_channel(welcome_channel_id)
         if not channel:
             return
 
-        verify = member.guild.get_channel(VERIFY_CHANNEL_ID)
-        helpdesk = member.guild.get_channel(HELPDESK_CHANNEL_ID)
+        verify = member.guild.get_channel(verify_channel_id) if verify_channel_id else None
+        helpdesk = member.guild.get_channel(helpdesk_channel_id) if helpdesk_channel_id else None
         verify_mention = verify.mention if verify else "#verify-here"
         helpdesk_mention = helpdesk.mention if helpdesk else "#helpdesk"
 
@@ -60,6 +81,48 @@ class Welcome(commands.Cog):
             embed=embed,
         )
 
+    @commands.hybrid_command(name="setwelcome", description="Set the welcome channel for this server")
+    @app_commands.describe(channel="The channel to send welcome messages in")
+    @commands.has_permissions(administrator=True)
+    @app_commands.default_permissions(administrator=True)
+    async def setwelcome(self, ctx: commands.Context, channel: discord.TextChannel):
+        async with aiosqlite.connect(DB_PATH) as db:
+            await db.execute("""
+                INSERT INTO welcome_config (guild_id, welcome_channel_id)
+                VALUES (?, ?)
+                ON CONFLICT(guild_id) DO UPDATE SET welcome_channel_id = ?
+            """, (ctx.guild.id, channel.id, channel.id))
+            await db.commit()
+        await ctx.send(f"Welcome channel set to {channel.mention}.", ephemeral=True)
+
+    @commands.hybrid_command(name="setverify", description="Set the verification channel for this server")
+    @app_commands.describe(channel="The verification channel to link to in welcome messages")
+    @commands.has_permissions(administrator=True)
+    @app_commands.default_permissions(administrator=True)
+    async def setverify(self, ctx: commands.Context, channel: discord.TextChannel):
+        async with aiosqlite.connect(DB_PATH) as db:
+            await db.execute("""
+                INSERT INTO welcome_config (guild_id, verify_channel_id)
+                VALUES (?, ?)
+                ON CONFLICT(guild_id) DO UPDATE SET verify_channel_id = ?
+            """, (ctx.guild.id, channel.id, channel.id))
+            await db.commit()
+        await ctx.send(f"Verify channel set to {channel.mention}.", ephemeral=True)
+
+    @commands.hybrid_command(name="sethelpdesk", description="Set the helpdesk channel for this server")
+    @app_commands.describe(channel="The helpdesk channel to link to in welcome messages")
+    @commands.has_permissions(administrator=True)
+    @app_commands.default_permissions(administrator=True)
+    async def sethelpdesk(self, ctx: commands.Context, channel: discord.TextChannel):
+        async with aiosqlite.connect(DB_PATH) as db:
+            await db.execute("""
+                INSERT INTO welcome_config (guild_id, helpdesk_channel_id)
+                VALUES (?, ?)
+                ON CONFLICT(guild_id) DO UPDATE SET helpdesk_channel_id = ?
+            """, (ctx.guild.id, channel.id, channel.id))
+            await db.commit()
+        await ctx.send(f"Helpdesk channel set to {channel.mention}.", ephemeral=True)
+
     @commands.hybrid_command(name="testwelcome", description="Test the welcome message")
     @commands.has_permissions(administrator=True)
     @app_commands.default_permissions(administrator=True)
@@ -67,17 +130,6 @@ class Welcome(commands.Cog):
         """Send a test welcome message for the current user."""
         await self.on_member_join(ctx.author)
         await ctx.send("Test welcome sent!", ephemeral=True)
-
-    @commands.hybrid_command(name="setwelcome", description="Show instructions to set the welcome channel")
-    @commands.has_permissions(administrator=True)
-    @app_commands.default_permissions(administrator=True)
-    async def setwelcome(self, ctx: commands.Context):
-        """Show welcome channel setup instructions."""
-        await ctx.send(
-            f"Add this to your `.env` and restart the bot:\n"
-            f"```\nWELCOME_CHANNEL_ID={ctx.channel.id}\n```",
-            ephemeral=True,
-        )
 
 
 async def setup(bot: commands.Bot):
