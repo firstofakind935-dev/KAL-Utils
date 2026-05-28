@@ -31,6 +31,8 @@ class KALBot(commands.Bot):
         for cog in COGS:
             await self.load_extension(cog)
             print(f"  Loaded: {cog}")
+        await self.tree.sync()
+        print("  Synced slash commands")
 
     async def on_ready(self):
         print(f"\nLogged in as {self.user} (ID: {self.user.id})")
@@ -70,12 +72,12 @@ async def ping(ctx: commands.Context):
 
 
 @bot.command(name="sync")
-@commands.is_owner()
+@commands.has_permissions(administrator=True)
 async def sync(ctx: commands.Context):
     """Sync slash commands to this server instantly."""
     bot.tree.copy_global_to(guild=ctx.guild)
-    await bot.tree.sync(guild=ctx.guild)
-    await ctx.send("Slash commands synced to this server!")
+    synced = await bot.tree.sync(guild=ctx.guild)
+    await ctx.send(f"Synced {len(synced)} slash commands to this server!")
 
 
 async def main():
