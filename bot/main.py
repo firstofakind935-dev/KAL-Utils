@@ -71,6 +71,15 @@ async def ping(ctx: commands.Context):
     await ctx.send(f"Pong! Latency: **{round(bot.latency * 1000)}ms**")
 
 
+@bot.command(name="sync")
+@commands.is_owner()
+async def sync(ctx: commands.Context):
+    """Sync slash commands to this server instantly."""
+    bot.tree.copy_global_to(guild=ctx.guild)
+    await bot.tree.sync(guild=ctx.guild)
+    await ctx.send("Slash commands synced to this server!")
+
+
 async def main():
     token = os.getenv("DISCORD_TOKEN")
     if not token:
