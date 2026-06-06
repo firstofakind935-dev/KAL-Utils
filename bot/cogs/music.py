@@ -1,5 +1,6 @@
 import asyncio
 from pathlib import Path
+from typing import Union
 
 import discord
 import imageio_ffmpeg
@@ -36,6 +37,8 @@ FLIGHT_SEQUENCE_PAUSE = [
     ("enginehum",   "Engine Hum"),
 ]
 
+AnyVoiceChannel = Union[discord.VoiceChannel, discord.StageChannel]
+
 
 def make_source(path: Path):
     return discord.FFmpegOpusAudio(
@@ -45,6 +48,19 @@ def make_source(path: Path):
         before_options="-nostdin",
         options="-vn -af aresample=48000",
     )
+
+
+async def connect_to_channel(guild: discord.Guild, channel: AnyVoiceChannel) -> discord.VoiceClient:
+    vc = guild.voice_client
+    if vc:
+        await vc.move_to(channel)
+    else:
+        vc = await channel.connect()
+
+    if isinstance(channel, discord.StageChannel):
+        await guild.me.edit(suppress=False)
+
+    return vc
 
 
 class Music(commands.Cog):
@@ -60,7 +76,6 @@ class Music(commands.Cog):
 
         sound_key, label = sequence[index]
 
-        # Handle timed pause
         if sound_key.startswith("pause:"):
             duration = int(sound_key.split(":")[1])
             minutes = duration // 60
@@ -97,36 +112,24 @@ class Music(commands.Cog):
     # ── Flight sequence ──────────────────────────────────────────────────────
 
     @commands.hybrid_command(name="flight", description="Play the full Korean Air flight sequence with safety briefing")
-    @app_commands.describe(channel="The voice channel to play in")
-    async def flight(self, ctx: commands.Context, channel: discord.VoiceChannel):
+    @app_commands.describe(channel="The voice or stage channel to play in")
+    async def flight(self, ctx: commands.Context, channel: AnyVoiceChannel):
         await ctx.defer()
-
         vc = ctx.guild.voice_client
         if vc and vc.is_playing():
             return await ctx.send("Already playing. Use `/stop` first.")
-
-        if vc:
-            await vc.move_to(channel)
-        else:
-            vc = await channel.connect()
-
+        vc = await connect_to_channel(ctx.guild, channel)
         await ctx.send(f"✈️ Starting flight sequence in **{channel.name}**!")
         await self._play_sequence(vc, 0, ctx.channel, FLIGHT_SEQUENCE)
 
     @commands.hybrid_command(name="flightpause", description="Flight sequence with a 5-minute pause in place of the safety briefing")
-    @app_commands.describe(channel="The voice channel to play in")
-    async def flightpause(self, ctx: commands.Context, channel: discord.VoiceChannel):
+    @app_commands.describe(channel="The voice or stage channel to play in")
+    async def flightpause(self, ctx: commands.Context, channel: AnyVoiceChannel):
         await ctx.defer()
-
         vc = ctx.guild.voice_client
         if vc and vc.is_playing():
             return await ctx.send("Already playing. Use `/stop` first.")
-
-        if vc:
-            await vc.move_to(channel)
-        else:
-            vc = await channel.connect()
-
+        vc = await connect_to_channel(ctx.guild, channel)
         await ctx.send(f"✈️ Starting flight sequence (with pause) in **{channel.name}**!")
         await self._play_sequence(vc, 0, ctx.channel, FLIGHT_SEQUENCE_PAUSE)
 
@@ -137,9 +140,8 @@ class Music(commands.Cog):
         vc = ctx.guild.voice_client
         if not vc:
             return await ctx.send("Nothing is playing.")
-
         if vc.is_playing():
-            vc.stop()  # triggers the after callback → advances sequence
+            vc.stop()
             await ctx.send("⏭️ Skipped.")
         elif self._pause_task and not self._pause_task.done():
             self._pause_task.cancel()
@@ -169,21 +171,21 @@ class Music(commands.Cog):
     # ── Individual sounds ────────────────────────────────────────────────────
 
     @commands.hybrid_command(name="airportsound", description="Play airport ambience in a voice channel")
-    @app_commands.describe(channel="The voice channel to play in")
-    async def airportsound(self, ctx: commands.Context, channel: discord.VoiceChannel):
+    @app_commands.describe(channel="The voice or stage channel to play in")
+    async def airportsound(self, ctx: commands.Context, channel: AnyVoiceChannel):
         await self._play_single(ctx, channel, "airport", "Airport Ambience")
 
     @commands.hybrid_command(name="boarding", description="Play Korean Air boarding music")
-    @app_commands.describe(channel="The voice channel to play in")
-    async def boarding(self, ctx: commands.Context, channel: discord.VoiceChannel):
+    @app_commands.describe(channel="The voice or stage channel to play in")
+    async def boarding(self, ctx: commands.Context, channel: AnyVoiceChannel):
         await self._play_single(ctx, channel, "boarding", "Korean Air Boarding Music")
 
     @commands.hybrid_command(name="anywhere", description="Play Korean Air – Anywhere is Possible")
-    @app_commands.describe(channel="The voice channel to play in")
-    async def anywhere(self, ctx: commands.Context, channel: discord.VoiceChannel):
+    @app_commands.describe(channel="The voice or stage channel to play in")
+    async def anywhere(self, ctx: commands.Context, channel: AnyVoiceChannel):
         await self._play_single(ctx, channel, "anywhere", "Korean Air – Anywhere is Possible")
 
-    async def _play_single(self, ctx: commands.Context, channel: discord.VoiceChannel, sound_key: str, label: str):
+    async def _play_single(self, ctx: commands.Context, channel: AnyVoiceChannel, sound_key: str, label: str):
         await ctx.defer()
         vc = ctx.guild.voice_client
         if vc and vc.is_playing():
@@ -194,10 +196,7 @@ class Music(commands.Cog):
             return await ctx.send(f"Audio file `{path.name}` not found. Contact an admin.")
 
         try:
-            if vc:
-                await vc.move_to(channel)
-            else:
-                vc = await channel.connect()
+            vc = await connect_to_channel(ctx.guild, channel)
 
             def after(error):
                 if error:
