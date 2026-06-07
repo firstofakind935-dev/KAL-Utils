@@ -25,6 +25,13 @@ PIPED_INSTANCES = [
     "https://api.piped.yt",
 ]
 
+INVIDIOUS_INSTANCES = [
+    "https://inv.nadeko.net",
+    "https://invidious.private.coffee",
+    "https://yt.cdaut.de",
+    "https://invidious.perennialte.ch",
+]
+
 _FFMPEG_BASE_BEFORE = "-nostdin -reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 5"
 FFMPEG_AFTER = "-vn -af aresample=48000"
 
@@ -107,6 +114,66 @@ async def piped_stream_url(video_id: str) -> tuple[str, dict]:
         raise ValueError("No audio streams from Piped")
     best = sorted(streams, key=lambda x: x.get("bitrate", 0), reverse=True)[0]
     return best["url"], {}
+
+
+async def cobalt_stream_url(video_id: str) -> tuple[str, dict]:
+    """Get audio stream via cobalt.tools — their servers fetch from YouTube."""
+    async with aiohttp.ClientSession() as session:
+        async with session.post(
+            "https://api.cobalt.tools/",
+            json={
+                "url": f"https://www.youtube.com/watch?v={video_id}",
+                "downloadMode": "audio",
+                "aFormat": "best",
+                "filenameStyle": "basic",
+            },
+            headers={"Accept": "application/json", "Content-Type": "application/json"},
+            timeout=aiohttp.ClientTimeout(total=30),
+        ) as r:
+            if r.status == 429:
+                raise RuntimeError("cobalt.tools rate limited")
+            if r.status != 200:
+                raise RuntimeError(f"cobalt.tools HTTP {r.status}")
+            data = await r.json()
+    status = data.get("status")
+    if status in ("redirect", "tunnel", "stream"):
+        url = data.get("url")
+        if url:
+            return url, {}
+    if status == "error":
+        code = data.get("error", {}).get("code", "unknown")
+        raise RuntimeError(f"cobalt.tools: {code}")
+    raise RuntimeError(f"cobalt.tools: unexpected status={status!r}")
+
+
+async def invidious_stream_url(video_id: str) -> tuple[str, dict]:
+    """Get a proxied audio stream URL from an Invidious instance."""
+    async with aiohttp.ClientSession() as session:
+        for base in INVIDIOUS_INSTANCES:
+            try:
+                async with session.get(
+                    f"{base}/api/v1/videos/{video_id}",
+                    timeout=aiohttp.ClientTimeout(total=15),
+                ) as r:
+                    if r.status != 200:
+                        continue
+                    data = await r.json()
+                audio = [
+                    f for f in data.get("adaptiveFormats", [])
+                    if "audio" in f.get("type", "") and "video" not in f.get("type", "")
+                ]
+                if not audio:
+                    continue
+                best = sorted(audio, key=lambda f: f.get("bitrate", 0), reverse=True)[0]
+                itag = best.get("itag")
+                if not itag:
+                    continue
+                # local=true forces Invidious to proxy through its own server
+                proxy_url = f"{base}/latest_version?id={video_id}&itag={itag}&local=true"
+                return proxy_url, {}
+            except Exception:
+                continue
+    raise RuntimeError("All Invidious instances failed")
 
 
 def _ytdlp_stream_info(video_url: str, opts: dict) -> tuple[str, dict]:
@@ -236,7 +303,25 @@ class YouTube(commands.Cog):
             errors.append(f"yt-dlp(fmt18): {e}")
             print(f"[YouTube] yt-dlp progressive failed: {e}")
 
-        # Attempt 3: Piped API
+        # Attempt 3: cobalt.tools — proxied through their servers, bypasses IP block
+        try:
+            result = await cobalt_stream_url(entry.video_id)
+            print(f"[YouTube] cobalt.tools OK: '{entry.title}'")
+            return result
+        except Exception as e:
+            errors.append(f"cobalt: {e}")
+            print(f"[YouTube] cobalt.tools failed: {e}")
+
+        # Attempt 4: Invidious proxy
+        try:
+            result = await invidious_stream_url(entry.video_id)
+            print(f"[YouTube] Invidious OK: '{entry.title}'")
+            return result
+        except Exception as e:
+            errors.append(f"invidious: {e}")
+            print(f"[YouTube] Invidious failed: {e}")
+
+        # Attempt 5: Piped API
         try:
             result = await piped_stream_url(entry.video_id)
             print(f"[YouTube] Piped OK: '{entry.title}'")
