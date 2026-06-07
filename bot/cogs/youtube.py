@@ -275,6 +275,15 @@ class GuildPlayer:
         self.queue: deque[QueueEntry] = deque()
         self.current: QueueEntry | None = None
         self.text_channel: discord.TextChannel | None = None
+        self.downloading: bool = False
+        self.skip_requested: bool = False
+
+    def stop(self):
+        """Clear all state so _advance exits cleanly."""
+        self.queue.clear()
+        self.current = None
+        self.downloading = False
+        self.skip_requested = True
 
 
 class YouTube(commands.Cog):
@@ -403,13 +412,24 @@ class YouTube(commands.Cog):
         # Download via Python first, then play from local file.
         if player.text_channel:
             await player.text_channel.send(f"⬇️ Downloading **{entry.title}**...")
+        player.downloading = True
+        player.skip_requested = False
         try:
             local_path = await _download_audio(stream_url, headers, entry.video_id)
         except Exception as e:
+            player.downloading = False
             print(f"[YouTube] Download failed for '{entry.title}': {e}")
             if player.text_channel:
                 await player.text_channel.send(f"⚠️ Download failed for **{entry.title}**: `{e}`")
             await self._advance(guild_id)
+            return
+        finally:
+            player.downloading = False
+
+        # Abort if the bot was disconnected or a skip/stop was requested during download
+        if player.skip_requested or not vc.is_connected():
+            local_path.unlink(missing_ok=True)
+            player.skip_requested = False
             return
 
         source = discord.FFmpegOpusAudio(str(local_path), **FFMPEG_LOCAL_OPTS)
@@ -428,7 +448,14 @@ class YouTube(commands.Cog):
                     )
             asyncio.run_coroutine_threadsafe(self._advance(guild_id), self.bot.loop)
 
-        vc.play(source, after=after)
+        try:
+            vc.play(source, after=after)
+        except Exception as e:
+            local_path.unlink(missing_ok=True)
+            print(f"[YouTube] vc.play failed: {e}")
+            asyncio.ensure_future(self._advance(guild_id))
+            return
+
         if player.text_channel:
             await player.text_channel.send(f"🎵 Now playing: **{entry.title}**")
 
@@ -539,11 +566,30 @@ class YouTube(commands.Cog):
 
     @commands.hybrid_command(name="next", description="Skip to the next song in the queue")
     async def next(self, ctx: commands.Context):
+        player = self.get_player(ctx.guild.id)
         vc = ctx.guild.voice_client
-        if not vc or (not vc.is_playing() and not vc.is_paused()):
+        if not vc:
+            return await ctx.send("Nothing is playing.")
+        if player.downloading:
+            player.skip_requested = True
+            await ctx.send("⏭️ Skipping current download...")
+            return
+        if not vc.is_playing() and not vc.is_paused():
             return await ctx.send("Nothing is playing.")
         vc.stop()
         await ctx.send("⏭️ Skipped.")
+
+    @commands.hybrid_command(name="ytstop", description="Stop YouTube music and disconnect")
+    async def ytstop(self, ctx: commands.Context):
+        player = self.get_player(ctx.guild.id)
+        player.stop()
+        vc = ctx.guild.voice_client
+        if vc:
+            vc.stop()
+            await vc.disconnect()
+            await ctx.send("⏹️ Stopped.")
+        else:
+            await ctx.send("Not connected.")
 
     @commands.hybrid_command(name="queue", description="Show the current music queue")
     async def queue(self, ctx: commands.Context):
