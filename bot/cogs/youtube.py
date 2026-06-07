@@ -33,6 +33,7 @@ def _make_ytdl_opts(cookies_path: str | None) -> dict:
         "source_address": "0.0.0.0",
         "nocheckcertificate": True,
         "ignoreerrors": False,
+        "check_formats": False,
     }
     if cookies_path:
         opts["cookiefile"] = cookies_path
