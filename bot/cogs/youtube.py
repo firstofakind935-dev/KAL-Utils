@@ -30,6 +30,9 @@ INVIDIOUS_INSTANCES = [
     "https://invidious.private.coffee",
     "https://yt.cdaut.de",
     "https://invidious.perennialte.ch",
+    "https://yewtu.be",
+    "https://invidious.tiekoetter.com",
+    "https://iv.datura.network",
 ]
 
 _FFMPEG_BASE_BEFORE = "-nostdin -reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 5"
@@ -124,17 +127,21 @@ async def cobalt_stream_url(video_id: str) -> tuple[str, dict]:
             json={
                 "url": f"https://www.youtube.com/watch?v={video_id}",
                 "downloadMode": "audio",
-                "aFormat": "best",
-                "filenameStyle": "basic",
+                "audioFormat": "best",
+                "alwaysProxy": True,
             },
             headers={"Accept": "application/json", "Content-Type": "application/json"},
             timeout=aiohttp.ClientTimeout(total=30),
         ) as r:
+            text = await r.text()
             if r.status == 429:
                 raise RuntimeError("cobalt.tools rate limited")
             if r.status != 200:
-                raise RuntimeError(f"cobalt.tools HTTP {r.status}")
-            data = await r.json()
+                raise RuntimeError(f"cobalt.tools HTTP {r.status}: {text[:200]}")
+            try:
+                data = __import__("json").loads(text)
+            except Exception:
+                raise RuntimeError(f"cobalt.tools bad JSON: {text[:200]}")
     status = data.get("status")
     if status in ("redirect", "tunnel", "stream"):
         url = data.get("url")
@@ -143,7 +150,7 @@ async def cobalt_stream_url(video_id: str) -> tuple[str, dict]:
     if status == "error":
         code = data.get("error", {}).get("code", "unknown")
         raise RuntimeError(f"cobalt.tools: {code}")
-    raise RuntimeError(f"cobalt.tools: unexpected status={status!r}")
+    raise RuntimeError(f"cobalt.tools: status={status!r} body={text[:200]}")
 
 
 async def invidious_stream_url(video_id: str) -> tuple[str, dict]:
@@ -153,7 +160,7 @@ async def invidious_stream_url(video_id: str) -> tuple[str, dict]:
             try:
                 async with session.get(
                     f"{base}/api/v1/videos/{video_id}",
-                    timeout=aiohttp.ClientTimeout(total=15),
+                    timeout=aiohttp.ClientTimeout(total=20),
                 ) as r:
                     if r.status != 200:
                         continue
