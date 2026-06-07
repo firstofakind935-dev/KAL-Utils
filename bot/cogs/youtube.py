@@ -1,4 +1,6 @@
 import asyncio
+import os
+import tempfile
 from collections import deque
 from pathlib import Path
 
@@ -9,7 +11,19 @@ from discord import app_commands
 from discord.ext import commands
 
 FFMPEG_EXE = imageio_ffmpeg.get_ffmpeg_exe()
-COOKIES_FILE = Path(__file__).resolve().parent.parent.parent / "cookies.txt"
+
+def _resolve_cookies() -> str | None:
+    """Write YOUTUBE_COOKIES env var to a temp file, or use cookies.txt if present."""
+    env_cookies = os.getenv("YOUTUBE_COOKIES")
+    if env_cookies:
+        tmp = tempfile.NamedTemporaryFile(mode="w", suffix=".txt", delete=False)
+        tmp.write(env_cookies)
+        tmp.close()
+        return tmp.name
+    local = Path(__file__).resolve().parent.parent.parent / "cookies.txt"
+    return str(local) if local.exists() else None
+
+_COOKIES_PATH = _resolve_cookies()
 
 YTDL_OPTIONS = {
     "format": "bestaudio/best",
@@ -20,7 +34,7 @@ YTDL_OPTIONS = {
     "source_address": "0.0.0.0",
     "nocheckcertificate": True,
     "ignoreerrors": False,
-    **({"cookiefile": str(COOKIES_FILE)} if COOKIES_FILE.exists() else {}),
+    **({"cookiefile": _COOKIES_PATH} if _COOKIES_PATH else {}),
 }
 
 FFMPEG_OPTIONS = {
