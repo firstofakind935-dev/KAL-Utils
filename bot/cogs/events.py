@@ -34,8 +34,8 @@ class Events(commands.Cog):
         channel="Voice or stage channel (leave blank for external event)",
         location="Location name if not in a channel",
     )
-    @commands.has_permissions(manage_events=True)
-    @app_commands.default_permissions(manage_events=True)
+    @commands.has_permissions(administrator=True)
+    @app_commands.default_permissions(administrator=True)
     async def createevent(
         self,
         ctx: commands.Context,
@@ -148,8 +148,8 @@ class Events(commands.Cog):
 
     @commands.hybrid_command(name="cancelevent", description="Cancel a scheduled event by name")
     @app_commands.describe(name="The name of the event to cancel (case-insensitive)")
-    @commands.has_permissions(manage_events=True)
-    @app_commands.default_permissions(manage_events=True)
+    @commands.has_permissions(administrator=True)
+    @app_commands.default_permissions(administrator=True)
     async def cancelevent(self, ctx: commands.Context, *, name: str):
         await ctx.defer()
 
