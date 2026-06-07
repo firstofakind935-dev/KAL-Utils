@@ -2,7 +2,6 @@ import asyncio
 import base64
 import os
 import re
-import shlex
 from collections import deque
 from pathlib import Path
 
@@ -15,6 +14,8 @@ from discord.ext import commands
 
 FFMPEG_EXE = imageio_ffmpeg.get_ffmpeg_exe()
 COOKIES_PATH = "/tmp/yt_cookies.txt"
+TEMP_AUDIO_DIR = Path("/tmp/kal_audio")
+TEMP_AUDIO_DIR.mkdir(exist_ok=True)
 
 PIPED_INSTANCES = [
     "https://pipedapi.kavin.rocks",
@@ -35,20 +36,49 @@ INVIDIOUS_INSTANCES = [
     "https://iv.datura.network",
 ]
 
-_FFMPEG_BASE_BEFORE = "-nostdin -reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 5"
-FFMPEG_AFTER = "-vn -af aresample=48000"
+# Local-file options — no reconnect flags needed, no headers needed
+FFMPEG_LOCAL_OPTS = {
+    "executable": FFMPEG_EXE,
+    "before_options": "-nostdin",
+    "options": "-vn -af aresample=48000",
+}
 
 
-def _build_ffmpeg_opts(headers: dict | None = None) -> dict:
-    before = _FFMPEG_BASE_BEFORE
-    if headers:
-        h_str = "".join(f"{k}: {v}\r\n" for k, v in headers.items())
-        before += f" -headers {shlex.quote(h_str)}"
-    return {
-        "executable": FFMPEG_EXE,
-        "before_options": before,
-        "options": FFMPEG_AFTER,
+async def _download_audio(url: str, req_headers: dict, video_id: str) -> Path:
+    """
+    Download audio from url via aiohttp into a temp file and return its path.
+    imageio_ffmpeg's bundled binary crashes (SIGSEGV) on HTTP URLs, so we
+    download via Python and let FFmpeg read a local file instead.
+    """
+    fetch_headers = {
+        "User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36",
+        **(req_headers or {}),
     }
+    async with aiohttp.ClientSession() as session:
+        async with session.get(
+            url,
+            headers=fetch_headers,
+            timeout=aiohttp.ClientTimeout(total=300),
+            allow_redirects=True,
+        ) as r:
+            if r.status != 200:
+                raise RuntimeError(f"Download HTTP {r.status}")
+            ct = r.headers.get("Content-Type", "")
+            if "webm" in ct or "opus" in ct:
+                ext = ".webm"
+            elif "mp4" in ct:
+                ext = ".mp4"
+            elif "mpeg" in ct or "mp3" in ct:
+                ext = ".mp3"
+            else:
+                ext = ".audio"
+            path = TEMP_AUDIO_DIR / f"{video_id}{ext}"
+            with open(path, "wb") as f:
+                async for chunk in r.content.iter_chunked(32768):
+                    f.write(chunk)
+    size_kb = path.stat().st_size // 1024
+    print(f"[YouTube] Downloaded {path.name} ({size_kb} KB)")
+    return path
 
 
 def _setup_cookies() -> str | None:
@@ -369,10 +399,26 @@ class YouTube(commands.Cog):
             await self._advance(guild_id)
             return
 
-        ffmpeg_opts = _build_ffmpeg_opts(headers)
-        source = discord.FFmpegOpusAudio(stream_url, **ffmpeg_opts)
+        # imageio_ffmpeg's bundled binary crashes (SIGSEGV) on HTTP URLs.
+        # Download via Python first, then play from local file.
+        if player.text_channel:
+            await player.text_channel.send(f"⬇️ Downloading **{entry.title}**...")
+        try:
+            local_path = await _download_audio(stream_url, headers, entry.video_id)
+        except Exception as e:
+            print(f"[YouTube] Download failed for '{entry.title}': {e}")
+            if player.text_channel:
+                await player.text_channel.send(f"⚠️ Download failed for **{entry.title}**: `{e}`")
+            await self._advance(guild_id)
+            return
+
+        source = discord.FFmpegOpusAudio(str(local_path), **FFMPEG_LOCAL_OPTS)
 
         def after(error):
+            try:
+                local_path.unlink(missing_ok=True)
+            except Exception:
+                pass
             if error:
                 print(f"[YouTube] Playback error for '{entry.title}': {error}")
                 if player.text_channel:
@@ -556,10 +602,9 @@ class YouTube(commands.Cog):
         else:
             await ctx.send("Nothing is paused.")
 
-    @commands.hybrid_command(name="yttest", description="Test whether FFmpeg can stream from an HTTP URL")
+    @commands.hybrid_command(name="yttest", description="Test audio download + playback pipeline")
     @commands.has_permissions(administrator=True)
     async def yttest(self, ctx: commands.Context):
-        """Plays a public MP3 to verify FFmpeg HTTP streaming works at all."""
         if not ctx.author.voice:
             return await ctx.send("Join a voice channel first.")
         await ctx.defer()
@@ -567,15 +612,21 @@ class YouTube(commands.Cog):
         if not vc:
             vc = await ctx.author.voice.channel.connect()
         test_url = "https://www.soundhelix.com/examples/mp3/SoundHelix-Song-1.mp3"
-        source = discord.FFmpegOpusAudio(test_url, **_build_ffmpeg_opts({}))
+        await ctx.send("⬇️ Downloading test audio...")
+        try:
+            path = await _download_audio(test_url, {}, "test")
+        except Exception as e:
+            return await ctx.send(f"❌ Download failed: `{e}`")
+        source = discord.FFmpegOpusAudio(str(path), **FFMPEG_LOCAL_OPTS)
 
         def after(error):
-            msg = f"✅ Stream test ended OK!" if not error else f"❌ Stream test error: `{error}`"
+            path.unlink(missing_ok=True)
+            msg = "✅ Test OK — audio pipeline works!" if not error else f"❌ FFmpeg error: `{error}`"
             asyncio.run_coroutine_threadsafe(ctx.channel.send(msg), self.bot.loop)
             asyncio.run_coroutine_threadsafe(vc.disconnect(), self.bot.loop)
 
         vc.play(source, after=after)
-        await ctx.send(f"🔊 Streaming test audio from `soundhelix.com` — if you hear music, FFmpeg HTTP works fine.")
+        await ctx.send("🔊 Playing test audio — you should hear music now.")
 
 
 async def setup(bot: commands.Bot):
