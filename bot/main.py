@@ -17,11 +17,13 @@ COGS = [
     "cogs.economy",
     "cogs.moderation",
     "cogs.welcome",
+    "cogs.events",
 ]
 
 intents = discord.Intents.default()
 intents.message_content = True
 intents.members = True
+intents.guild_scheduled_events = True
 
 
 class KALBot(commands.Bot):
