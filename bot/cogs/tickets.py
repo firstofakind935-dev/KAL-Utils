@@ -5,6 +5,20 @@ from discord.ext import commands
 from db.database import DB_PATH
 
 
+SECTION_PROMPTS = {
+    "General Support": "Please describe your issue and a staff member will assist you shortly.",
+    "Partnerships": (
+        "Thank you for your interest in partnering with Korean Air Virtual Airlines!\n\n"
+        "Please provide the following:\n"
+        "• Your organization/group name\n"
+        "• Type of partnership you're seeking\n"
+        "• Any additional details"
+    ),
+}
+
+DEFAULT_PROMPT = "Please describe your request and a staff member will assist you shortly."
+
+
 async def get_config(guild_id: int):
     async with aiosqlite.connect(DB_PATH) as db:
         async with db.execute(
@@ -48,12 +62,10 @@ async def create_ticket_channel(guild: discord.Guild, user: discord.Member, sect
         )
         await db.commit()
 
+    prompt = SECTION_PROMPTS.get(section, DEFAULT_PROMPT)
     embed = discord.Embed(
         title=f"🎫 {section}",
-        description=(
-            f"Welcome {user.mention}! Please describe your issue and a staff member will assist you shortly.\n\n"
-            f"Click **Close Ticket** or use `/closeticket` when resolved."
-        ),
+        description=f"Welcome {user.mention}!\n\n{prompt}\n\nClick **Close Ticket** or use `/closeticket` when resolved.",
         color=discord.Color(0x00A4E4),
     )
     await channel.send(embed=embed, view=CloseTicketView())
@@ -70,7 +82,7 @@ class TicketPanel(discord.ui.View):
         self.label2 = label2
 
         self.add_item(TicketSectionButton(label1, "ticket:section1", discord.ButtonStyle.primary, "🎫"))
-        self.add_item(TicketSectionButton(label2, "ticket:section2", discord.ButtonStyle.secondary, "✈️"))
+        self.add_item(TicketSectionButton(label2, "ticket:section2", discord.ButtonStyle.secondary, "🤝"))
 
 
 class TicketSectionButton(discord.ui.Button):
@@ -190,7 +202,7 @@ class Tickets(commands.Cog):
         category: discord.CategoryChannel,
         support_role: discord.Role = None,
         section1: str = "General Support",
-        section2: str = "Flight Support",
+        section2: str = "Partnerships",
     ):
         async with aiosqlite.connect(DB_PATH) as db:
             await db.execute("""
@@ -207,9 +219,9 @@ class Tickets(commands.Cog):
         embed = discord.Embed(
             title="🎫 Korean Air Support",
             description=(
-                f"Need help? Choose a section below to open a private support ticket.\n\n"
+                f"Need help? Choose a category below to open a private support ticket.\n\n"
                 f"🎫 **{section1}** — general questions and assistance\n"
-                f"✈️ **{section2}** — flight and operations support"
+                f"🤝 **{section2}** — partnership inquiries and collaborations"
             ),
             color=discord.Color(0x00A4E4),
         )
