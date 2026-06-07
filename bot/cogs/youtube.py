@@ -2,6 +2,7 @@ import asyncio
 import base64
 import os
 import re
+import shlex
 from collections import deque
 from pathlib import Path
 
@@ -24,11 +25,20 @@ PIPED_INSTANCES = [
     "https://api.piped.yt",
 ]
 
-FFMPEG_OPTIONS = {
-    "executable": FFMPEG_EXE,
-    "before_options": "-nostdin -reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 5",
-    "options": "-vn -af aresample=48000",
-}
+_FFMPEG_BASE_BEFORE = "-nostdin -reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 5"
+FFMPEG_AFTER = "-vn -af aresample=48000"
+
+
+def _build_ffmpeg_opts(headers: dict | None = None) -> dict:
+    before = _FFMPEG_BASE_BEFORE
+    if headers:
+        h_str = "".join(f"{k}: {v}\r\n" for k, v in headers.items())
+        before += f" -headers {shlex.quote(h_str)}"
+    return {
+        "executable": FFMPEG_EXE,
+        "before_options": before,
+        "options": FFMPEG_AFTER,
+    }
 
 
 def _setup_cookies() -> str | None:
@@ -52,17 +62,14 @@ def _setup_cookies() -> str | None:
 
 
 def _extract_video_id(url: str) -> str | None:
-    for pattern in [
+    m = re.search(
         r'(?:youtube\.com/watch\?v=|youtu\.be/|youtube\.com/embed/)([a-zA-Z0-9_-]{11})',
-    ]:
-        m = re.search(pattern, url)
-        if m:
-            return m.group(1)
-    return None
+        url,
+    )
+    return m.group(1) if m else None
 
 
 async def _piped_get(session: aiohttp.ClientSession, path: str) -> dict:
-    """Try each Piped instance until one responds."""
     for base in PIPED_INSTANCES:
         try:
             async with session.get(f"{base}{path}", timeout=aiohttp.ClientTimeout(total=15)) as r:
@@ -74,7 +81,6 @@ async def _piped_get(session: aiohttp.ClientSession, path: str) -> dict:
 
 
 async def piped_search(query: str) -> dict:
-    """Search Piped and return first video result as a QueueEntry-compatible dict."""
     async with aiohttp.ClientSession() as session:
         data = await _piped_get(session, f"/search?q={aiohttp.helpers.quote(query)}&filter=videos")
     items = [i for i in data.get("items", []) if i.get("type") == "stream"]
@@ -92,38 +98,56 @@ async def piped_search(query: str) -> dict:
     }
 
 
-async def piped_stream_url(video_id: str) -> str:
-    """Get the best audio stream URL from Piped."""
+async def piped_stream_url(video_id: str) -> tuple[str, dict]:
+    """Returns (url, headers) — headers empty since Piped URLs need none."""
     async with aiohttp.ClientSession() as session:
         data = await _piped_get(session, f"/streams/{video_id}")
     streams = data.get("audioStreams", [])
     if not streams:
         raise ValueError("No audio streams from Piped")
     best = sorted(streams, key=lambda x: x.get("bitrate", 0), reverse=True)[0]
-    return best["url"]
+    return best["url"], {}
 
 
-def _ytdlp_stream_url(video_url: str, opts: dict) -> str:
-    """Extract a playable audio URL using yt-dlp (blocking — run in executor)."""
+def _ytdlp_stream_info(video_url: str, opts: dict) -> tuple[str, dict]:
+    """Extract stream URL + required HTTP headers. Blocking — call in executor."""
     with yt_dlp.YoutubeDL(opts) as ydl:
         info = ydl.extract_info(video_url, download=False)
         if "entries" in info:
             info = info["entries"][0]
-        # Direct URL on the info dict (common for single formats)
-        if info.get("url"):
-            return info["url"]
-        # Otherwise pick best audio-only format
+
+        base_headers = info.get("http_headers", {})
         formats = info.get("formats", [])
-        audio = [f for f in formats if f.get("vcodec") == "none" and f.get("url")]
-        if audio:
-            return sorted(audio, key=lambda f: f.get("abr") or 0, reverse=True)[0]["url"]
-        if formats:
-            return formats[-1]["url"]
-    raise ValueError("yt-dlp returned no usable URL")
+
+        # Prefer audio-only formats with highest bitrate
+        audio_only = [
+            f for f in formats
+            if f.get("vcodec") in ("none", None)
+            and f.get("acodec") not in ("none", None)
+            and f.get("url")
+        ]
+        if audio_only:
+            best = sorted(
+                audio_only,
+                key=lambda f: f.get("abr") or f.get("tbr") or 0,
+                reverse=True,
+            )[0]
+            print(f"[YouTube] yt-dlp selected audio format: {best.get('format_id')} "
+                  f"ext={best.get('ext')} abr={best.get('abr')}")
+            return best["url"], best.get("http_headers", base_headers)
+
+        # Fall back to whatever yt-dlp selected via the format string
+        if info.get("url"):
+            return info["url"], base_headers
+
+        if formats and formats[-1].get("url"):
+            f = formats[-1]
+            return f["url"], f.get("http_headers", base_headers)
+
+    raise ValueError("yt-dlp returned no usable stream URL")
 
 
 def _ytdlp_search_info(query: str, opts: dict) -> dict:
-    """Use yt-dlp only for metadata lookup (no stream extraction)."""
     with yt_dlp.YoutubeDL({**opts, "skip_download": True}) as ydl:
         info = ydl.extract_info(query, download=False)
         if "entries" in info:
@@ -155,7 +179,6 @@ class YouTube(commands.Cog):
         self.players: dict[int, GuildPlayer] = {}
         cookies_path = _setup_cookies()
 
-        # Metadata-only opts (search, extract_flat)
         self.ytdl_meta_opts = {
             "noplaylist": True,
             "quiet": True,
@@ -164,7 +187,7 @@ class YouTube(commands.Cog):
             "skip_download": True,
             "extract_flat": True,
         }
-        # Stream extraction opts — android client bypasses PO token requirement
+        # android/ios/tv_embedded clients bypass PO token requirement
         self.ytdl_stream_opts = {
             "noplaylist": True,
             "quiet": True,
@@ -184,17 +207,18 @@ class YouTube(commands.Cog):
             self.players[guild_id] = GuildPlayer()
         return self.players[guild_id]
 
-    async def _resolve_stream_url(self, entry: QueueEntry) -> str:
-        """Get a playable URL: yt-dlp android client first, Piped as fallback."""
+    async def _resolve_stream(self, entry: QueueEntry) -> tuple[str, dict]:
+        """Returns (stream_url, headers). yt-dlp android first, Piped as fallback."""
         loop = asyncio.get_running_loop()
         try:
-            url = await loop.run_in_executor(
-                None, _ytdlp_stream_url,
+            url, headers = await loop.run_in_executor(
+                None,
+                _ytdlp_stream_info,
                 f"https://www.youtube.com/watch?v={entry.video_id}",
                 self.ytdl_stream_opts,
             )
-            print(f"[YouTube] yt-dlp stream OK for {entry.title}")
-            return url
+            print(f"[YouTube] yt-dlp stream OK for '{entry.title}' headers={list(headers.keys())}")
+            return url, headers
         except Exception as e:
             print(f"[YouTube] yt-dlp stream failed ({e}), trying Piped...")
 
@@ -222,19 +246,20 @@ class YouTube(commands.Cog):
         player.current = entry
 
         try:
-            stream_url = await self._resolve_stream_url(entry)
+            stream_url, headers = await self._resolve_stream(entry)
         except Exception as e:
-            print(f"[YouTube] All stream methods failed for {entry.title}: {e}")
+            print(f"[YouTube] All stream methods failed for '{entry.title}': {e}")
             if player.text_channel:
                 await player.text_channel.send(f"⚠️ Could not stream **{entry.title}**: `{e}`")
             await self._advance(guild_id)
             return
 
-        source = discord.FFmpegOpusAudio(stream_url, **FFMPEG_OPTIONS)
+        ffmpeg_opts = _build_ffmpeg_opts(headers)
+        source = discord.FFmpegOpusAudio(stream_url, **ffmpeg_opts)
 
         def after(error):
             if error:
-                print(f"[YouTube] Playback error: {error}")
+                print(f"[YouTube] Playback error for '{entry.title}': {error}")
             asyncio.run_coroutine_threadsafe(self._advance(guild_id), self.bot.loop)
 
         vc.play(source, after=after)
@@ -245,15 +270,21 @@ class YouTube(commands.Cog):
     @commands.has_permissions(administrator=True)
     async def ytcheck(self, ctx: commands.Context):
         cookie_file = self.ytdl_stream_opts.get("cookiefile")
-        cookie_status = f"✅ `{cookie_file}` ({Path(cookie_file).stat().st_size} bytes)" \
-            if cookie_file and Path(cookie_file).exists() else "❌ Not loaded"
+        cookie_status = (
+            f"✅ `{cookie_file}` ({Path(cookie_file).stat().st_size} bytes)"
+            if cookie_file and Path(cookie_file).exists()
+            else "❌ Not loaded"
+        )
         try:
             async with aiohttp.ClientSession() as session:
                 await _piped_get(session, "/search?q=test&filter=videos")
             piped_status = "✅ Reachable"
         except Exception as e:
             piped_status = f"❌ {e}"
-        await ctx.send(f"**Cookies:** {cookie_status}\n**Piped API:** {piped_status}", ephemeral=True)
+        await ctx.send(
+            f"**Cookies:** {cookie_status}\n**Piped API:** {piped_status}",
+            ephemeral=True,
+        )
 
     @commands.hybrid_command(name="play", description="Play a song from YouTube by URL or search query")
     @app_commands.describe(query="YouTube URL or search terms")
@@ -273,7 +304,6 @@ class YouTube(commands.Cog):
 
         try:
             if video_id:
-                # Direct URL — try Piped metadata first, fall back to yt-dlp
                 try:
                     async with aiohttp.ClientSession() as session:
                         data = await _piped_get(session, f"/streams/{video_id}")
@@ -301,7 +331,6 @@ class YouTube(commands.Cog):
                         "webpage_url": raw.get("webpage_url", f"https://www.youtube.com/watch?v={video_id}"),
                     }
             else:
-                # Search — try Piped, fall back to yt-dlp
                 try:
                     info = await piped_search(query)
                 except Exception:
