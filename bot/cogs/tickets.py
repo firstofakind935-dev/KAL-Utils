@@ -5,19 +5,82 @@ from discord.ext import commands
 from db.database import DB_PATH
 
 
-class TicketButton(discord.ui.View):
-    def __init__(self):
-        super().__init__(timeout=None)
+async def get_config(guild_id: int):
+    async with aiosqlite.connect(DB_PATH) as db:
+        async with db.execute(
+            "SELECT support_role_id, category_id, section1_label, section2_label FROM ticket_config WHERE guild_id = ?",
+            (guild_id,),
+        ) as cur:
+            return await cur.fetchone()
 
-    @discord.ui.button(
-        label="Open a Ticket",
-        style=discord.ButtonStyle.primary,
-        emoji="🎫",
-        custom_id="ticket:open",
+
+async def create_ticket_channel(guild: discord.Guild, user: discord.Member, section: str):
+    config = await get_config(guild.id)
+    support_role = guild.get_role(config[1] if config else None) if config and config[0] else None
+    category = guild.get_channel(config[1]) if config and config[1] else None
+
+    # re-fetch properly
+    role_id = config[0] if config else None
+    cat_id  = config[1] if config else None
+    support_role = guild.get_role(role_id) if role_id else None
+    category     = guild.get_channel(cat_id) if cat_id else None
+
+    overwrites = {
+        guild.default_role: discord.PermissionOverwrite(view_channel=False),
+        user: discord.PermissionOverwrite(view_channel=True, send_messages=True, attach_files=True),
+        guild.me: discord.PermissionOverwrite(view_channel=True, send_messages=True, manage_channels=True),
+    }
+    if support_role:
+        overwrites[support_role] = discord.PermissionOverwrite(view_channel=True, send_messages=True)
+
+    safe_section = section.lower().replace(" ", "-")
+    channel = await guild.create_text_channel(
+        f"{safe_section}-{user.name}",
+        overwrites=overwrites,
+        category=category,
+        topic=f"[{section}] Support ticket for {user} ({user.id})",
     )
-    async def open_ticket(self, interaction: discord.Interaction, button: discord.ui.Button):
+
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute(
+            "INSERT INTO tickets (guild_id, user_id, channel_id, section) VALUES (?, ?, ?, ?)",
+            (guild.id, user.id, channel.id, section),
+        )
+        await db.commit()
+
+    embed = discord.Embed(
+        title=f"🎫 {section}",
+        description=(
+            f"Welcome {user.mention}! Please describe your issue and a staff member will assist you shortly.\n\n"
+            f"Click **Close Ticket** or use `/closeticket` when resolved."
+        ),
+        color=discord.Color(0x00A4E4),
+    )
+    await channel.send(embed=embed, view=CloseTicketView())
+    if support_role:
+        await channel.send(support_role.mention, delete_after=3)
+
+    return channel
+
+
+class TicketPanel(discord.ui.View):
+    def __init__(self, label1: str = "General Support", label2: str = "Flight Support"):
+        super().__init__(timeout=None)
+        self.label1 = label1
+        self.label2 = label2
+
+        self.add_item(TicketSectionButton(label1, "ticket:section1", discord.ButtonStyle.primary, "🎫"))
+        self.add_item(TicketSectionButton(label2, "ticket:section2", discord.ButtonStyle.secondary, "✈️"))
+
+
+class TicketSectionButton(discord.ui.Button):
+    def __init__(self, label: str, custom_id: str, style: discord.ButtonStyle, emoji: str):
+        super().__init__(label=label, custom_id=custom_id, style=style, emoji=emoji)
+
+    async def callback(self, interaction: discord.Interaction):
         guild = interaction.guild
-        user = interaction.user
+        user  = interaction.user
+        section = self.label
 
         async with aiosqlite.connect(DB_PATH) as db:
             async with db.execute(
@@ -33,50 +96,9 @@ class TicketButton(discord.ui.View):
                     f"You already have an open ticket: {ch.mention}", ephemeral=True
                 )
 
-        async with aiosqlite.connect(DB_PATH) as db:
-            async with db.execute(
-                "SELECT support_role_id FROM ticket_config WHERE guild_id = ?",
-                (guild.id,),
-            ) as cur:
-                config = await cur.fetchone()
-
-        support_role = guild.get_role(config[0]) if config and config[0] else None
-
-        overwrites = {
-            guild.default_role: discord.PermissionOverwrite(view_channel=False),
-            user: discord.PermissionOverwrite(view_channel=True, send_messages=True, attach_files=True),
-            guild.me: discord.PermissionOverwrite(view_channel=True, send_messages=True, manage_channels=True),
-        }
-        if support_role:
-            overwrites[support_role] = discord.PermissionOverwrite(view_channel=True, send_messages=True)
-
-        channel = await guild.create_text_channel(
-            f"ticket-{user.name}",
-            overwrites=overwrites,
-            topic=f"Support ticket for {user} ({user.id})",
-        )
-
-        async with aiosqlite.connect(DB_PATH) as db:
-            await db.execute(
-                "INSERT INTO tickets (guild_id, user_id, channel_id) VALUES (?, ?, ?)",
-                (guild.id, user.id, channel.id),
-            )
-            await db.commit()
-
-        embed = discord.Embed(
-            title="🎫 Support Ticket",
-            description=(
-                f"Welcome {user.mention}! Please describe your issue and a staff member will assist you shortly.\n\n"
-                f"To close this ticket, use `/closeticket`."
-            ),
-            color=discord.Color(0x00A4E4),
-        )
-        close_view = CloseTicketView()
-        await channel.send(embed=embed, view=close_view)
-        if support_role:
-            await channel.send(support_role.mention, delete_after=3)
-
-        await interaction.response.send_message(f"Ticket opened: {channel.mention}", ephemeral=True)
+        await interaction.response.defer(ephemeral=True)
+        channel = await create_ticket_channel(guild, user, section)
+        await interaction.followup.send(f"Ticket opened: {channel.mention}", ephemeral=True)
 
 
 class CloseTicketView(discord.ui.View):
@@ -90,6 +112,7 @@ class CloseTicketView(discord.ui.View):
         custom_id="ticket:close",
     )
     async def close_ticket(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.defer()
         await close_ticket_channel(interaction.channel, interaction.user)
 
 
@@ -129,7 +152,10 @@ class Tickets(commands.Cog):
             await db.execute("""
                 CREATE TABLE IF NOT EXISTS ticket_config (
                     guild_id        INTEGER PRIMARY KEY,
-                    support_role_id INTEGER
+                    support_role_id INTEGER,
+                    category_id     INTEGER,
+                    section1_label  TEXT NOT NULL DEFAULT 'General Support',
+                    section2_label  TEXT NOT NULL DEFAULT 'Flight Support'
                 )
             """)
             await db.execute("""
@@ -138,18 +164,22 @@ class Tickets(commands.Cog):
                     guild_id   INTEGER NOT NULL,
                     user_id    INTEGER NOT NULL,
                     channel_id INTEGER NOT NULL,
+                    section    TEXT,
                     closed     INTEGER NOT NULL DEFAULT 0
                 )
             """)
             await db.commit()
 
-        self.bot.add_view(TicketButton())
+        self.bot.add_view(TicketPanel())
         self.bot.add_view(CloseTicketView())
 
-    @commands.hybrid_command(name="settickets", description="Post a ticket panel in a channel")
+    @commands.hybrid_command(name="settickets", description="Post a ticket panel with 2 sections")
     @app_commands.describe(
         channel="Channel to post the ticket panel in",
-        support_role="Role to ping and grant access to tickets",
+        category="Category where ticket channels will be created",
+        support_role="Role to ping and grant access to all tickets",
+        section1="Label for the first ticket type (default: General Support)",
+        section2="Label for the second ticket type (default: Flight Support)",
     )
     @commands.has_permissions(administrator=True)
     @app_commands.default_permissions(administrator=True)
@@ -157,23 +187,37 @@ class Tickets(commands.Cog):
         self,
         ctx: commands.Context,
         channel: discord.TextChannel,
+        category: discord.CategoryChannel,
         support_role: discord.Role = None,
+        section1: str = "General Support",
+        section2: str = "Flight Support",
     ):
         async with aiosqlite.connect(DB_PATH) as db:
             await db.execute("""
-                INSERT INTO ticket_config (guild_id, support_role_id)
-                VALUES (?, ?)
-                ON CONFLICT(guild_id) DO UPDATE SET support_role_id = excluded.support_role_id
-            """, (ctx.guild.id, support_role.id if support_role else None))
+                INSERT INTO ticket_config (guild_id, support_role_id, category_id, section1_label, section2_label)
+                VALUES (?, ?, ?, ?, ?)
+                ON CONFLICT(guild_id) DO UPDATE SET
+                    support_role_id = excluded.support_role_id,
+                    category_id     = excluded.category_id,
+                    section1_label  = excluded.section1_label,
+                    section2_label  = excluded.section2_label
+            """, (ctx.guild.id, support_role.id if support_role else None, category.id, section1, section2))
             await db.commit()
 
         embed = discord.Embed(
             title="🎫 Korean Air Support",
-            description="Need help? Click the button below to open a private support ticket.",
+            description=(
+                f"Need help? Choose a section below to open a private support ticket.\n\n"
+                f"🎫 **{section1}** — general questions and assistance\n"
+                f"✈️ **{section2}** — flight and operations support"
+            ),
             color=discord.Color(0x00A4E4),
         )
-        await channel.send(embed=embed, view=TicketButton())
-        await ctx.send(f"Ticket panel posted in {channel.mention}.", ephemeral=True)
+        await channel.send(embed=embed, view=TicketPanel(section1, section2))
+        await ctx.send(
+            f"Ticket panel posted in {channel.mention}. Channels will be created in **{category.name}**.",
+            ephemeral=True,
+        )
 
     @commands.hybrid_command(name="closeticket", description="Close the current support ticket")
     async def closeticket(self, ctx: commands.Context):
