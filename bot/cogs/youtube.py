@@ -1,5 +1,6 @@
 import asyncio
 from collections import deque
+from pathlib import Path
 
 import discord
 import imageio_ffmpeg
@@ -8,6 +9,7 @@ from discord import app_commands
 from discord.ext import commands
 
 FFMPEG_EXE = imageio_ffmpeg.get_ffmpeg_exe()
+COOKIES_FILE = Path(__file__).resolve().parent.parent.parent / "cookies.txt"
 
 YTDL_OPTIONS = {
     "format": "bestaudio/best",
@@ -18,6 +20,7 @@ YTDL_OPTIONS = {
     "source_address": "0.0.0.0",
     "nocheckcertificate": True,
     "ignoreerrors": False,
+    **({"cookiefile": str(COOKIES_FILE)} if COOKIES_FILE.exists() else {}),
 }
 
 FFMPEG_OPTIONS = {
