@@ -1,6 +1,5 @@
 import asyncio
 import os
-import tempfile
 from collections import deque
 from pathlib import Path
 
@@ -11,31 +10,34 @@ from discord import app_commands
 from discord.ext import commands
 
 FFMPEG_EXE = imageio_ffmpeg.get_ffmpeg_exe()
+COOKIES_PATH = "/tmp/yt_cookies.txt"
 
-def _resolve_cookies() -> str | None:
-    """Write YOUTUBE_COOKIES env var to a temp file, or use cookies.txt if present."""
+def _setup_cookies() -> str | None:
+    """Write cookies to a fixed temp path. Returns path if cookies exist, else None."""
     env_cookies = os.getenv("YOUTUBE_COOKIES")
     if env_cookies:
-        tmp = tempfile.NamedTemporaryFile(mode="w", suffix=".txt", delete=False)
-        tmp.write(env_cookies)
-        tmp.close()
-        return tmp.name
+        with open(COOKIES_PATH, "w") as f:
+            f.write(env_cookies)
+        return COOKIES_PATH
     local = Path(__file__).resolve().parent.parent.parent / "cookies.txt"
-    return str(local) if local.exists() else None
+    if local.exists():
+        return str(local)
+    return None
 
-_COOKIES_PATH = _resolve_cookies()
-
-YTDL_OPTIONS = {
-    "format": "bestaudio/best",
-    "noplaylist": True,
-    "quiet": True,
-    "no_warnings": True,
-    "default_search": "ytsearch",
-    "source_address": "0.0.0.0",
-    "nocheckcertificate": True,
-    "ignoreerrors": False,
-    **({"cookiefile": _COOKIES_PATH} if _COOKIES_PATH else {}),
-}
+def _make_ytdl_opts(cookies_path: str | None) -> dict:
+    opts = {
+        "format": "bestaudio/best",
+        "noplaylist": True,
+        "quiet": True,
+        "no_warnings": True,
+        "default_search": "ytsearch",
+        "source_address": "0.0.0.0",
+        "nocheckcertificate": True,
+        "ignoreerrors": False,
+    }
+    if cookies_path:
+        opts["cookiefile"] = cookies_path
+    return opts
 
 FFMPEG_OPTIONS = {
     "executable": FFMPEG_EXE,
@@ -44,18 +46,16 @@ FFMPEG_OPTIONS = {
 }
 
 
-def fetch_info(query: str) -> dict:
-    """Extract info and return a fresh stream URL."""
-    with yt_dlp.YoutubeDL(YTDL_OPTIONS) as ydl:
+def fetch_info(query: str, opts: dict) -> dict:
+    with yt_dlp.YoutubeDL(opts) as ydl:
         info = ydl.extract_info(query, download=False)
         if "entries" in info:
             info = info["entries"][0]
         return info
 
 
-def fetch_stream_url(webpage_url: str) -> str:
-    """Re-fetch a fresh stream URL right before playback."""
-    with yt_dlp.YoutubeDL(YTDL_OPTIONS) as ydl:
+def fetch_stream_url(webpage_url: str, opts: dict) -> str:
+    with yt_dlp.YoutubeDL(opts) as ydl:
         info = ydl.extract_info(webpage_url, download=False)
         return info["url"]
 
@@ -81,6 +81,9 @@ class YouTube(commands.Cog):
     def __init__(self, bot: commands.Bot):
         self.bot = bot
         self.players: dict[int, GuildPlayer] = {}
+        cookies_path = _setup_cookies()
+        self.ytdl_opts = _make_ytdl_opts(cookies_path)
+        print(f"[YouTube] Cookies: {'loaded from ' + cookies_path if cookies_path else 'NOT found — YouTube may block playback'}")
 
     def get_player(self, guild_id: int) -> GuildPlayer:
         if guild_id not in self.players:
@@ -112,7 +115,7 @@ class YouTube(commands.Cog):
         try:
             # Re-fetch a fresh URL right before playing
             stream_url = await asyncio.get_running_loop().run_in_executor(
-                None, fetch_stream_url, entry.webpage_url
+                None, fetch_stream_url, entry.webpage_url, self.ytdl_opts
             )
         except Exception as e:
             print(f"[YouTube] Failed to fetch stream URL: {e}")
@@ -133,6 +136,22 @@ class YouTube(commands.Cog):
         if player.text_channel:
             await player.text_channel.send(f"🎵 Now playing: **{entry.title}**")
 
+    @commands.hybrid_command(name="ytcheck", description="Check YouTube cookie status")
+    @commands.has_permissions(administrator=True)
+    async def ytcheck(self, ctx: commands.Context):
+        cookie_file = self.ytdl_opts.get("cookiefile")
+        if cookie_file and Path(cookie_file).exists():
+            size = Path(cookie_file).stat().st_size
+            await ctx.send(f"✅ Cookies loaded from `{cookie_file}` ({size} bytes)", ephemeral=True)
+        else:
+            env_set = bool(os.getenv("YOUTUBE_COOKIES"))
+            await ctx.send(
+                f"❌ No cookies file found.\n"
+                f"`YOUTUBE_COOKIES` env var: {'set but file missing' if env_set else 'not set'}\n"
+                f"Local cookies.txt: {'not found' if not Path(COOKIES_PATH).exists() else 'found'}",
+                ephemeral=True,
+            )
+
     @commands.hybrid_command(name="play", description="Play a song from YouTube by URL or search query")
     @app_commands.describe(query="YouTube URL or search terms")
     async def play(self, ctx: commands.Context, *, query: str):
@@ -148,7 +167,7 @@ class YouTube(commands.Cog):
             vc = await ctx.author.voice.channel.connect()
 
         try:
-            info = await asyncio.get_running_loop().run_in_executor(None, fetch_info, query)
+            info = await asyncio.get_running_loop().run_in_executor(None, fetch_info, query, self.ytdl_opts)
         except Exception as e:
             return await ctx.send(f"Could not find that song: `{e}`")
 
