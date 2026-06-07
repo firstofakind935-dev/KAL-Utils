@@ -15,6 +15,14 @@ async def init_db():
                 PRIMARY KEY (user_id, guild_id)
             )
         """)
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS event_tickets (
+                event_id TEXT NOT NULL,
+                user_id  INTEGER NOT NULL,
+                guild_id INTEGER NOT NULL,
+                PRIMARY KEY (event_id, user_id)
+            )
+        """)
         await db.commit()
 
 
