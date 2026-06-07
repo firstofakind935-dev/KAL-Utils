@@ -16,7 +16,6 @@ YTDL_OPTIONS = {
     "no_warnings": True,
     "default_search": "ytsearch",
     "source_address": "0.0.0.0",
-    "extractaudio": True,
     "nocheckcertificate": True,
     "ignoreerrors": False,
 }
@@ -29,6 +28,7 @@ FFMPEG_OPTIONS = {
 
 
 def fetch_info(query: str) -> dict:
+    """Extract info and return a fresh stream URL."""
     with yt_dlp.YoutubeDL(YTDL_OPTIONS) as ydl:
         info = ydl.extract_info(query, download=False)
         if "entries" in info:
@@ -36,11 +36,28 @@ def fetch_info(query: str) -> dict:
         return info
 
 
+def fetch_stream_url(webpage_url: str) -> str:
+    """Re-fetch a fresh stream URL right before playback."""
+    with yt_dlp.YoutubeDL(YTDL_OPTIONS) as ydl:
+        info = ydl.extract_info(webpage_url, download=False)
+        return info["url"]
+
+
+class QueueEntry:
+    def __init__(self, title: str, webpage_url: str, thumbnail: str = None,
+                 duration: int = None, uploader: str = None):
+        self.title = title
+        self.webpage_url = webpage_url
+        self.thumbnail = thumbnail
+        self.duration = duration
+        self.uploader = uploader
+
+
 class GuildPlayer:
     def __init__(self):
-        self.queue: deque = deque()
-        self.current: dict | None = None
-        self.loop: bool = False
+        self.queue: deque[QueueEntry] = deque()
+        self.current: QueueEntry | None = None
+        self.text_channel: discord.TextChannel | None = None
 
 
 class YouTube(commands.Cog):
@@ -68,10 +85,22 @@ class YouTube(commands.Cog):
                 await vc.disconnect()
             return
 
-        info = player.queue.popleft()
-        player.current = info
+        entry = player.queue.popleft()
+        player.current = entry
 
-        source = discord.FFmpegOpusAudio(info["url"], **FFMPEG_OPTIONS)
+        try:
+            # Re-fetch a fresh URL right before playing
+            stream_url = await asyncio.get_event_loop().run_in_executor(
+                None, fetch_stream_url, entry.webpage_url
+            )
+        except Exception as e:
+            print(f"[YouTube] Failed to fetch stream URL: {e}")
+            if player.text_channel:
+                await player.text_channel.send(f"⚠️ Could not stream **{entry.title}**: `{e}`")
+            await self._advance(guild_id)
+            return
+
+        source = discord.FFmpegOpusAudio(stream_url, **FFMPEG_OPTIONS)
 
         def after(error):
             if error:
@@ -79,6 +108,9 @@ class YouTube(commands.Cog):
             asyncio.run_coroutine_threadsafe(self._advance(guild_id), self.bot.loop)
 
         vc.play(source, after=after)
+
+        if player.text_channel:
+            await player.text_channel.send(f"🎵 Now playing: **{entry.title}**")
 
     @commands.hybrid_command(name="play", description="Play a song from YouTube by URL or search query")
     @app_commands.describe(query="YouTube URL or search terms")
@@ -97,21 +129,30 @@ class YouTube(commands.Cog):
         try:
             info = await asyncio.get_event_loop().run_in_executor(None, fetch_info, query)
         except Exception as e:
-            return await ctx.send(f"Could not fetch audio: `{e}`")
+            return await ctx.send(f"Could not find that song: `{e}`")
+
+        entry = QueueEntry(
+            title=info.get("title", "Unknown"),
+            webpage_url=info.get("webpage_url", info.get("url")),
+            thumbnail=info.get("thumbnail"),
+            duration=info.get("duration"),
+            uploader=info.get("uploader"),
+        )
 
         player = self.get_player(ctx.guild.id)
-        player.queue.append(info)
+        player.text_channel = ctx.channel
+        player.queue.append(entry)
 
-        if not vc.is_playing():
+        if not vc.is_playing() and not vc.is_paused():
+            await ctx.send(f"⏳ Loading **{entry.title}**...")
             await self._advance(ctx.guild.id)
-            await ctx.send(f"🎵 Now playing: **{info['title']}**")
         else:
-            await ctx.send(f"📋 Added to queue: **{info['title']}** (position {len(player.queue)})")
+            await ctx.send(f"📋 Added to queue: **{entry.title}** (position {len(player.queue)})")
 
     @commands.hybrid_command(name="next", description="Skip to the next song in the queue")
     async def next(self, ctx: commands.Context):
         vc = ctx.guild.voice_client
-        if not vc or not vc.is_playing():
+        if not vc or (not vc.is_playing() and not vc.is_paused()):
             return await ctx.send("Nothing is playing.")
         vc.stop()
         await ctx.send("⏭️ Skipped.")
@@ -128,14 +169,14 @@ class YouTube(commands.Cog):
         if player.current:
             embed.add_field(
                 name="Now Playing",
-                value=f"[{player.current['title']}]({player.current.get('webpage_url', '')})",
+                value=f"[{player.current.title}]({player.current.webpage_url})",
                 inline=False,
             )
 
         if player.queue:
             lines = []
-            for i, info in enumerate(list(player.queue)[:10], 1):
-                lines.append(f"`{i}.` {info['title']}")
+            for i, entry in enumerate(list(player.queue)[:10], 1):
+                lines.append(f"`{i}.` {entry.title}")
             if len(player.queue) > 10:
                 lines.append(f"...and {len(player.queue) - 10} more")
             embed.add_field(name="Up Next", value="\n".join(lines), inline=False)
@@ -148,19 +189,19 @@ class YouTube(commands.Cog):
         if not player.current:
             return await ctx.send("Nothing is playing.")
 
-        info = player.current
+        entry = player.current
         embed = discord.Embed(
             title="🎵 Now Playing",
-            description=f"**[{info['title']}]({info.get('webpage_url', '')})**",
+            description=f"**[{entry.title}]({entry.webpage_url})**",
             color=discord.Color(0x00A4E4),
         )
-        if info.get("thumbnail"):
-            embed.set_thumbnail(url=info["thumbnail"])
-        if info.get("duration"):
-            mins, secs = divmod(info["duration"], 60)
+        if entry.thumbnail:
+            embed.set_thumbnail(url=entry.thumbnail)
+        if entry.duration:
+            mins, secs = divmod(entry.duration, 60)
             embed.add_field(name="Duration", value=f"{mins}:{secs:02d}")
-        if info.get("uploader"):
-            embed.add_field(name="Channel", value=info["uploader"])
+        if entry.uploader:
+            embed.add_field(name="Channel", value=entry.uploader)
 
         await ctx.send(embed=embed)
 
