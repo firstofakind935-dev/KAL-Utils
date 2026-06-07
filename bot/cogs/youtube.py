@@ -208,21 +208,44 @@ class YouTube(commands.Cog):
         return self.players[guild_id]
 
     async def _resolve_stream(self, entry: QueueEntry) -> tuple[str, dict]:
-        """Returns (stream_url, headers). yt-dlp android first, Piped as fallback."""
+        """Returns (stream_url, headers). Tries multiple strategies in order."""
         loop = asyncio.get_running_loop()
+        errors: list[str] = []
+        video_url = f"https://www.youtube.com/watch?v={entry.video_id}"
+
+        # Attempt 1: android/ios/tv_embedded clients — bypass PO token
         try:
             url, headers = await loop.run_in_executor(
-                None,
-                _ytdlp_stream_info,
-                f"https://www.youtube.com/watch?v={entry.video_id}",
-                self.ytdl_stream_opts,
+                None, _ytdlp_stream_info, video_url, self.ytdl_stream_opts,
             )
-            print(f"[YouTube] yt-dlp stream OK for '{entry.title}' headers={list(headers.keys())}")
+            print(f"[YouTube] yt-dlp android OK: '{entry.title}' headers={list(headers.keys())}")
             return url, headers
         except Exception as e:
-            print(f"[YouTube] yt-dlp stream failed ({e}), trying Piped...")
+            errors.append(f"yt-dlp(android): {e}")
+            print(f"[YouTube] yt-dlp android failed: {e}")
 
-        return await piped_stream_url(entry.video_id)
+        # Attempt 2: format 18/17 — progressive MP4, no DASH, works from any IP
+        try:
+            opts_prog = {**self.ytdl_stream_opts, "format": "18/17"}
+            url, headers = await loop.run_in_executor(
+                None, _ytdlp_stream_info, video_url, opts_prog,
+            )
+            print(f"[YouTube] yt-dlp progressive OK: '{entry.title}'")
+            return url, headers
+        except Exception as e:
+            errors.append(f"yt-dlp(fmt18): {e}")
+            print(f"[YouTube] yt-dlp progressive failed: {e}")
+
+        # Attempt 3: Piped API
+        try:
+            result = await piped_stream_url(entry.video_id)
+            print(f"[YouTube] Piped OK: '{entry.title}'")
+            return result
+        except Exception as e:
+            errors.append(f"Piped: {e}")
+            print(f"[YouTube] Piped failed: {e}")
+
+        raise RuntimeError(" | ".join(errors))
 
     async def _advance(self, guild_id: int):
         player = self.get_player(guild_id)
