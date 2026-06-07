@@ -19,6 +19,7 @@ COGS = [
     "cogs.welcome",
     "cogs.events",
     "cogs.tickets",
+    "cogs.youtube",
 ]
 
 intents = discord.Intents.default()
