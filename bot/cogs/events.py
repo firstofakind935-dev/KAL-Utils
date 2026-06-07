@@ -71,11 +71,6 @@ class Events(commands.Cog):
                 entity_type=3,
                 entity_metadata={"location": "TBD"},
             )
-            event = discord.ScheduledEvent(
-                state=ctx.guild._state,
-                guild=ctx.guild,
-                data=data,
-            )
         except discord.Forbidden:
             return await ctx.send("I don't have permission to create events.")
         except Exception as e:
@@ -83,7 +78,7 @@ class Events(commands.Cog):
 
         embed = discord.Embed(
             title="✅ Event Created",
-            description=f"**{event.name}**",
+            description=f"**{data['name']}**",
             color=discord.Color(0x00A4E4),
         )
         embed.add_field(name="Start", value=f"<t:{int(start.timestamp())}:F>", inline=True)
