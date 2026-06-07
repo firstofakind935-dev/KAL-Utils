@@ -68,6 +68,7 @@ class Events(commands.Cog):
                 end_time=end,
                 entity_type=discord.EntityType.external,
                 location="TBD",
+                privacy_level=discord.PrivacyLevel.guild_only,
             )
         except discord.Forbidden:
             return await ctx.send("I don't have permission to create events.")
