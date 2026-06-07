@@ -16,8 +16,10 @@ def _setup_cookies() -> str | None:
     """Write cookies to a fixed temp path. Returns path if cookies exist, else None."""
     env_cookies = os.getenv("YOUTUBE_COOKIES")
     if env_cookies:
+        # Railway/some UIs replace real newlines with literal \n — fix that
+        content = env_cookies.replace("\\n", "\n").replace("\\t", "\t")
         with open(COOKIES_PATH, "w") as f:
-            f.write(env_cookies)
+            f.write(content)
         return COOKIES_PATH
     local = Path(__file__).resolve().parent.parent.parent / "cookies.txt"
     if local.exists():
