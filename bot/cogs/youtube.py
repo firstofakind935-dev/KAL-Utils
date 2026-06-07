@@ -1,8 +1,11 @@
 import asyncio
+import base64
 import os
+import re
 from collections import deque
 from pathlib import Path
 
+import aiohttp
 import discord
 import imageio_ffmpeg
 import yt_dlp
@@ -12,10 +15,20 @@ from discord.ext import commands
 FFMPEG_EXE = imageio_ffmpeg.get_ffmpeg_exe()
 COOKIES_PATH = "/tmp/yt_cookies.txt"
 
+PIPED_INSTANCES = [
+    "https://pipedapi.kavin.rocks",
+    "https://piped-api.garudalinux.org",
+    "https://api.piped.projectsegfau.lt",
+]
+
+FFMPEG_OPTIONS = {
+    "executable": FFMPEG_EXE,
+    "before_options": "-nostdin -reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 5",
+    "options": "-vn -af aresample=48000",
+}
+
+
 def _setup_cookies() -> str | None:
-    """Write cookies to a fixed temp path. Returns path if cookies exist, else None."""
-    import base64
-    # Try base64-encoded version first (most reliable for Railway)
     env_b64 = os.getenv("YOUTUBE_COOKIES_B64")
     if env_b64:
         try:
@@ -25,70 +38,83 @@ def _setup_cookies() -> str | None:
             return COOKIES_PATH
         except Exception as e:
             print(f"[YouTube] Failed to decode YOUTUBE_COOKIES_B64: {e}")
-
-    # Fall back to raw env var
     env_cookies = os.getenv("YOUTUBE_COOKIES")
     if env_cookies:
         content = env_cookies.replace("\\n", "\n").replace("\\t", "\t")
         with open(COOKIES_PATH, "w") as f:
             f.write(content)
         return COOKIES_PATH
-
     local = Path(__file__).resolve().parent.parent.parent / "cookies.txt"
-    if local.exists():
-        return str(local)
+    return str(local) if local.exists() else None
+
+
+def _extract_video_id(url: str) -> str | None:
+    for pattern in [
+        r'(?:youtube\.com/watch\?v=|youtu\.be/|youtube\.com/embed/)([a-zA-Z0-9_-]{11})',
+    ]:
+        m = re.search(pattern, url)
+        if m:
+            return m.group(1)
     return None
 
-def _make_ytdl_opts(cookies_path: str | None) -> dict:
-    opts = {
-        "format": "18/17/36/best",  # legacy progressive formats — no PO token required
-        "noplaylist": True,
-        "quiet": True,
-        "no_warnings": True,
-        "default_search": "ytsearch",
-        "source_address": "0.0.0.0",
-        "nocheckcertificate": True,
-        "ignoreerrors": False,
-        "check_formats": False,
+
+async def _piped_get(session: aiohttp.ClientSession, path: str) -> dict:
+    """Try each Piped instance until one responds."""
+    for base in PIPED_INSTANCES:
+        try:
+            async with session.get(f"{base}{path}", timeout=aiohttp.ClientTimeout(total=10)) as r:
+                if r.status == 200:
+                    return await r.json()
+        except Exception:
+            continue
+    raise RuntimeError("All Piped instances failed")
+
+
+async def piped_search(query: str) -> dict:
+    """Search Piped and return first video result as a QueueEntry-compatible dict."""
+    async with aiohttp.ClientSession() as session:
+        data = await _piped_get(session, f"/search?q={aiohttp.helpers.quote(query)}&filter=videos")
+    items = [i for i in data.get("items", []) if i.get("type") == "stream"]
+    if not items:
+        raise ValueError("No results found")
+    item = items[0]
+    video_id = _extract_video_id(item.get("url", "")) or item.get("url", "").split("=")[-1]
+    return {
+        "id": video_id,
+        "title": item.get("title", "Unknown"),
+        "thumbnail": item.get("thumbnail"),
+        "duration": item.get("duration"),
+        "uploader": item.get("uploaderName"),
+        "webpage_url": f"https://www.youtube.com/watch?v={video_id}",
     }
-    if cookies_path:
-        opts["cookiefile"] = cookies_path
-    return opts
-
-FFMPEG_OPTIONS = {
-    "executable": FFMPEG_EXE,
-    "before_options": "-nostdin -reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 5",
-    "options": "-vn -af aresample=48000",
-}
 
 
-def fetch_info(query: str, opts: dict) -> dict:
-    with yt_dlp.YoutubeDL(opts) as ydl:
+async def piped_stream_url(video_id: str) -> str:
+    """Get the best audio stream URL from Piped."""
+    async with aiohttp.ClientSession() as session:
+        data = await _piped_get(session, f"/streams/{video_id}")
+    streams = data.get("audioStreams", [])
+    if not streams:
+        raise ValueError("No audio streams from Piped")
+    best = sorted(streams, key=lambda x: x.get("bitrate", 0), reverse=True)[0]
+    return best["url"]
+
+
+def ytdl_search_info(query: str, opts: dict) -> dict:
+    """Use yt-dlp only for metadata lookup (no stream extraction)."""
+    with yt_dlp.YoutubeDL({**opts, "skip_download": True}) as ydl:
         info = ydl.extract_info(query, download=False)
         if "entries" in info:
             info = info["entries"][0]
         return info
 
 
-def fetch_stream_url(webpage_url: str, opts: dict) -> str:
-    with yt_dlp.YoutubeDL(opts) as ydl:
-        info = ydl.extract_info(webpage_url, download=False)
-        if "entries" in info:
-            info = info["entries"][0]
-        formats = info.get("formats", [])
-        # Prefer audio-only formats sorted by quality
-        audio = [f for f in formats if f.get("vcodec") == "none" and f.get("url")]
-        if audio:
-            return audio[-1]["url"]
-        # Fall back to any format with a direct URL
-        return info["url"]
-
-
 class QueueEntry:
-    def __init__(self, title: str, webpage_url: str, thumbnail: str = None,
-                 duration: int = None, uploader: str = None):
+    def __init__(self, title: str, webpage_url: str, video_id: str,
+                 thumbnail: str = None, duration: int = None, uploader: str = None):
         self.title = title
         self.webpage_url = webpage_url
+        self.video_id = video_id
         self.thumbnail = thumbnail
         self.duration = duration
         self.uploader = uploader
@@ -106,8 +132,18 @@ class YouTube(commands.Cog):
         self.bot = bot
         self.players: dict[int, GuildPlayer] = {}
         cookies_path = _setup_cookies()
-        self.ytdl_opts = _make_ytdl_opts(cookies_path)
-        print(f"[YouTube] Cookies: {'loaded from ' + cookies_path if cookies_path else 'NOT found — YouTube may block playback'}")
+        self.ytdl_opts = {
+            "noplaylist": True,
+            "quiet": True,
+            "no_warnings": True,
+            "default_search": "ytsearch",
+            "skip_download": True,
+            "extract_flat": True,
+        }
+        if cookies_path:
+            self.ytdl_opts["cookiefile"] = cookies_path
+        status = f"loaded from {cookies_path}" if cookies_path else "not found"
+        print(f"[YouTube] Cookies: {status}")
 
     def get_player(self, guild_id: int) -> GuildPlayer:
         if guild_id not in self.players:
@@ -124,11 +160,10 @@ class YouTube(commands.Cog):
 
         if not player.queue:
             player.current = None
-            # Disconnect after 5 minutes of inactivity
             for _ in range(60):
                 await asyncio.sleep(5)
-                if player.queue or (vc.is_playing() or vc.is_paused()):
-                    return  # new song was added, let it handle advancing
+                if player.queue or vc.is_playing() or vc.is_paused():
+                    return
             if vc.is_connected() and not vc.is_playing():
                 await vc.disconnect()
             return
@@ -137,12 +172,9 @@ class YouTube(commands.Cog):
         player.current = entry
 
         try:
-            # Re-fetch a fresh URL right before playing
-            stream_url = await asyncio.get_running_loop().run_in_executor(
-                None, fetch_stream_url, entry.webpage_url, self.ytdl_opts
-            )
+            stream_url = await piped_stream_url(entry.video_id)
         except Exception as e:
-            print(f"[YouTube] Failed to fetch stream URL: {e}")
+            print(f"[YouTube] Piped failed for {entry.title}: {e}")
             if player.text_channel:
                 await player.text_channel.send(f"⚠️ Could not stream **{entry.title}**: `{e}`")
             await self._advance(guild_id)
@@ -156,25 +188,22 @@ class YouTube(commands.Cog):
             asyncio.run_coroutine_threadsafe(self._advance(guild_id), self.bot.loop)
 
         vc.play(source, after=after)
-
         if player.text_channel:
             await player.text_channel.send(f"🎵 Now playing: **{entry.title}**")
 
-    @commands.hybrid_command(name="ytcheck", description="Check YouTube cookie status")
+    @commands.hybrid_command(name="ytcheck", description="Check YouTube cookie/Piped status")
     @commands.has_permissions(administrator=True)
     async def ytcheck(self, ctx: commands.Context):
         cookie_file = self.ytdl_opts.get("cookiefile")
-        if cookie_file and Path(cookie_file).exists():
-            size = Path(cookie_file).stat().st_size
-            await ctx.send(f"✅ Cookies loaded from `{cookie_file}` ({size} bytes)", ephemeral=True)
-        else:
-            env_set = bool(os.getenv("YOUTUBE_COOKIES"))
-            await ctx.send(
-                f"❌ No cookies file found.\n"
-                f"`YOUTUBE_COOKIES` env var: {'set but file missing' if env_set else 'not set'}\n"
-                f"Local cookies.txt: {'not found' if not Path(COOKIES_PATH).exists() else 'found'}",
-                ephemeral=True,
-            )
+        cookie_status = f"✅ `{cookie_file}` ({Path(cookie_file).stat().st_size} bytes)" \
+            if cookie_file and Path(cookie_file).exists() else "❌ Not loaded"
+        try:
+            async with aiohttp.ClientSession() as session:
+                data = await _piped_get(session, "/search?q=test&filter=videos")
+            piped_status = "✅ Reachable"
+        except Exception as e:
+            piped_status = f"❌ {e}"
+        await ctx.send(f"**Cookies:** {cookie_status}\n**Piped API:** {piped_status}", ephemeral=True)
 
     @commands.hybrid_command(name="play", description="Play a song from YouTube by URL or search query")
     @app_commands.describe(query="YouTube URL or search terms")
@@ -190,17 +219,35 @@ class YouTube(commands.Cog):
         elif not vc:
             vc = await ctx.author.voice.channel.connect()
 
+        # Check if it's a URL or a search query
+        video_id = _extract_video_id(query)
+
         try:
-            info = await asyncio.get_running_loop().run_in_executor(None, fetch_info, query, self.ytdl_opts)
+            if video_id:
+                # Direct URL — fetch metadata from Piped
+                async with aiohttp.ClientSession() as session:
+                    data = await _piped_get(session, f"/streams/{video_id}")
+                info = {
+                    "id": video_id,
+                    "title": data.get("title", "Unknown"),
+                    "thumbnail": data.get("thumbnailUrl"),
+                    "duration": data.get("duration"),
+                    "uploader": data.get("uploader"),
+                    "webpage_url": f"https://www.youtube.com/watch?v={video_id}",
+                }
+            else:
+                # Search query — use Piped search
+                info = await piped_search(query)
         except Exception as e:
             return await ctx.send(f"Could not find that song: `{e}`")
 
         entry = QueueEntry(
             title=info.get("title", "Unknown"),
-            webpage_url=info.get("webpage_url", info.get("url")),
-            thumbnail=info.get("thumbnail"),
+            webpage_url=info.get("webpage_url", ""),
+            video_id=info.get("id", ""),
+            thumbnail=info.get("thumbnail") or info.get("thumbnailUrl"),
             duration=info.get("duration"),
-            uploader=info.get("uploader"),
+            uploader=info.get("uploader") or info.get("uploaderName"),
         )
 
         player = self.get_player(ctx.guild.id)
@@ -224,27 +271,20 @@ class YouTube(commands.Cog):
     @commands.hybrid_command(name="queue", description="Show the current music queue")
     async def queue(self, ctx: commands.Context):
         player = self.get_player(ctx.guild.id)
-
         if not player.current and not player.queue:
             return await ctx.send("The queue is empty.")
-
         embed = discord.Embed(title="🎵 Music Queue", color=discord.Color(0x00A4E4))
-
         if player.current:
             embed.add_field(
                 name="Now Playing",
                 value=f"[{player.current.title}]({player.current.webpage_url})",
                 inline=False,
             )
-
         if player.queue:
-            lines = []
-            for i, entry in enumerate(list(player.queue)[:10], 1):
-                lines.append(f"`{i}.` {entry.title}")
+            lines = [f"`{i}.` {e.title}" for i, e in enumerate(list(player.queue)[:10], 1)]
             if len(player.queue) > 10:
                 lines.append(f"...and {len(player.queue) - 10} more")
             embed.add_field(name="Up Next", value="\n".join(lines), inline=False)
-
         await ctx.send(embed=embed)
 
     @commands.hybrid_command(name="nowplaying", description="Show what's currently playing")
@@ -252,7 +292,6 @@ class YouTube(commands.Cog):
         player = self.get_player(ctx.guild.id)
         if not player.current:
             return await ctx.send("Nothing is playing.")
-
         entry = player.current
         embed = discord.Embed(
             title="🎵 Now Playing",
@@ -266,7 +305,6 @@ class YouTube(commands.Cog):
             embed.add_field(name="Duration", value=f"{mins}:{secs:02d}")
         if entry.uploader:
             embed.add_field(name="Channel", value=entry.uploader)
-
         await ctx.send(embed=embed)
 
     @commands.hybrid_command(name="pause", description="Pause the current song")
