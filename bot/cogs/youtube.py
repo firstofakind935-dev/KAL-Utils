@@ -375,6 +375,11 @@ class YouTube(commands.Cog):
         def after(error):
             if error:
                 print(f"[YouTube] Playback error for '{entry.title}': {error}")
+                if player.text_channel:
+                    asyncio.run_coroutine_threadsafe(
+                        player.text_channel.send(f"❌ FFmpeg error: `{error}`"),
+                        self.bot.loop,
+                    )
             asyncio.run_coroutine_threadsafe(self._advance(guild_id), self.bot.loop)
 
         vc.play(source, after=after)
@@ -550,6 +555,27 @@ class YouTube(commands.Cog):
             await ctx.send("▶️ Resumed.")
         else:
             await ctx.send("Nothing is paused.")
+
+    @commands.hybrid_command(name="yttest", description="Test whether FFmpeg can stream from an HTTP URL")
+    @commands.has_permissions(administrator=True)
+    async def yttest(self, ctx: commands.Context):
+        """Plays a public MP3 to verify FFmpeg HTTP streaming works at all."""
+        if not ctx.author.voice:
+            return await ctx.send("Join a voice channel first.")
+        await ctx.defer()
+        vc = ctx.guild.voice_client
+        if not vc:
+            vc = await ctx.author.voice.channel.connect()
+        test_url = "https://www.soundhelix.com/examples/mp3/SoundHelix-Song-1.mp3"
+        source = discord.FFmpegOpusAudio(test_url, **_build_ffmpeg_opts({}))
+
+        def after(error):
+            msg = f"✅ Stream test ended OK!" if not error else f"❌ Stream test error: `{error}`"
+            asyncio.run_coroutine_threadsafe(ctx.channel.send(msg), self.bot.loop)
+            asyncio.run_coroutine_threadsafe(vc.disconnect(), self.bot.loop)
+
+        vc.play(source, after=after)
+        await ctx.send(f"🔊 Streaming test audio from `soundhelix.com` — if you hear music, FFmpeg HTTP works fine.")
 
 
 async def setup(bot: commands.Bot):
