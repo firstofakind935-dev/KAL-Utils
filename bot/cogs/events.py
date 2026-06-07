@@ -1,4 +1,3 @@
-import re
 from datetime import datetime, timedelta, timezone
 
 import discord
@@ -6,17 +5,27 @@ from discord import app_commands
 from discord.ext import commands
 
 
-def parse_datetime(date_str: str, time_str: str) -> datetime:
-    """Parse date (YYYY-MM-DD or DD/MM/YYYY) and time (HH:MM) into a UTC-aware datetime."""
-    date_str = date_str.strip()
-    time_str = time_str.strip()
+FORMATS = [
+    "%d/%m/%Y %H:%M",
+    "%d/%m/%y %H:%M",
+    "%d/%m %H:%M",
+    "%d-%m-%Y %H:%M",
+    "%Y-%m-%d %H:%M",
+]
 
-    if re.match(r"\d{2}/\d{2}/\d{4}", date_str):
-        dt = datetime.strptime(f"{date_str} {time_str}", "%d/%m/%Y %H:%M")
-    else:
-        dt = datetime.strptime(f"{date_str} {time_str}", "%Y-%m-%d %H:%M")
 
-    return dt.replace(tzinfo=timezone.utc)
+def parse_when(when: str) -> datetime:
+    """Try multiple date/time formats. Assumes current year if year is omitted."""
+    when = when.strip()
+    for fmt in FORMATS:
+        try:
+            dt = datetime.strptime(when, fmt)
+            if dt.year == 1900:
+                dt = dt.replace(year=datetime.now(timezone.utc).year)
+            return dt.replace(tzinfo=timezone.utc)
+        except ValueError:
+            continue
+    raise ValueError(f"Could not parse: {when}")
 
 
 class Events(commands.Cog):
@@ -26,8 +35,7 @@ class Events(commands.Cog):
     @commands.hybrid_command(name="createevent", description="Create a new scheduled event in this server")
     @app_commands.describe(
         name="Event name",
-        date="Date (YYYY-MM-DD or DD/MM/YYYY)",
-        time="Start time in UTC (HH:MM, 24-hour)",
+        when='Date and time in UTC — e.g. "25/12 20:00" or "25/12/2026 20:00"',
         duration="Duration in minutes (default: 60)",
     )
     @commands.has_permissions(administrator=True)
@@ -36,16 +44,17 @@ class Events(commands.Cog):
         self,
         ctx: commands.Context,
         name: str,
-        date: str,
-        time: str,
+        when: str,
         duration: int = 60,
     ):
         await ctx.defer()
 
         try:
-            start = parse_datetime(date, time)
+            start = parse_when(when)
         except ValueError:
-            return await ctx.send("Invalid date/time. Use `YYYY-MM-DD` and `HH:MM` (24-hour UTC).")
+            return await ctx.send(
+                'Invalid date/time. Examples: `25/12 20:00` · `25/12/2026 20:00` · `2026-12-25 20:00`'
+            )
 
         if start < datetime.now(timezone.utc):
             return await ctx.send("Start time must be in the future.")
