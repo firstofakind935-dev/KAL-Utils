@@ -97,8 +97,12 @@ class YouTube(commands.Cog):
 
         if not player.queue:
             player.current = None
-            await asyncio.sleep(300)
-            if not vc.is_playing() and vc.is_connected():
+            # Disconnect after 5 minutes of inactivity
+            for _ in range(60):
+                await asyncio.sleep(5)
+                if player.queue or (vc.is_playing() or vc.is_paused()):
+                    return  # new song was added, let it handle advancing
+            if vc.is_connected() and not vc.is_playing():
                 await vc.disconnect()
             return
 
@@ -107,7 +111,7 @@ class YouTube(commands.Cog):
 
         try:
             # Re-fetch a fresh URL right before playing
-            stream_url = await asyncio.get_event_loop().run_in_executor(
+            stream_url = await asyncio.get_running_loop().run_in_executor(
                 None, fetch_stream_url, entry.webpage_url
             )
         except Exception as e:
@@ -144,7 +148,7 @@ class YouTube(commands.Cog):
             vc = await ctx.author.voice.channel.connect()
 
         try:
-            info = await asyncio.get_event_loop().run_in_executor(None, fetch_info, query)
+            info = await asyncio.get_running_loop().run_in_executor(None, fetch_info, query)
         except Exception as e:
             return await ctx.send(f"Could not find that song: `{e}`")
 

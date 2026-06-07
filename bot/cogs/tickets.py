@@ -30,10 +30,6 @@ async def get_config(guild_id: int):
 
 async def create_ticket_channel(guild: discord.Guild, user: discord.Member, section: str):
     config = await get_config(guild.id)
-    support_role = guild.get_role(config[1] if config else None) if config and config[0] else None
-    category = guild.get_channel(config[1]) if config and config[1] else None
-
-    # re-fetch properly
     role_id = config[0] if config else None
     cat_id  = config[1] if config else None
     support_role = guild.get_role(role_id) if role_id else None

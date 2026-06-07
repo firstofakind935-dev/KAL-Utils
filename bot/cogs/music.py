@@ -67,9 +67,11 @@ class Music(commands.Cog):
     def __init__(self, bot: commands.Bot):
         self.bot = bot
         self._pause_task: asyncio.Task | None = None
-        self._delay_requested: bool = False
+        self._delay_count: int = 0
 
     async def _play_sequence(self, vc: discord.VoiceClient, index: int, channel: discord.TextChannel, sequence: list):
+        if not vc.is_connected():
+            return
         if index >= len(sequence):
             await channel.send("✈️ Flight sequence complete. Safe travels!")
             await vc.disconnect()
@@ -103,8 +105,8 @@ class Music(commands.Cog):
         def after(error):
             if error:
                 print(f"[Music] Sequence error at {label}: {error}")
-            if self._delay_requested:
-                self._delay_requested = False
+            if self._delay_count > 0:
+                self._delay_count -= 1
                 next_index = index  # replay current track
             else:
                 next_index = index + 1
@@ -146,8 +148,8 @@ class Music(commands.Cog):
         vc = ctx.guild.voice_client
         if not vc or not vc.is_playing():
             return await ctx.send("Nothing is currently playing.")
-        self._delay_requested = True
-        await ctx.send("⏱️ Current track will repeat once before moving on.")
+        self._delay_count += 1
+        await ctx.send(f"⏱️ Current track will repeat **{self._delay_count}** more time{'s' if self._delay_count != 1 else ''} before moving on.")
 
     @commands.hybrid_command(name="skip", description="Skip the current sound and play the next in the sequence")
     async def skip(self, ctx: commands.Context):
