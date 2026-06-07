@@ -14,13 +14,26 @@ COOKIES_PATH = "/tmp/yt_cookies.txt"
 
 def _setup_cookies() -> str | None:
     """Write cookies to a fixed temp path. Returns path if cookies exist, else None."""
+    import base64
+    # Try base64-encoded version first (most reliable for Railway)
+    env_b64 = os.getenv("YOUTUBE_COOKIES_B64")
+    if env_b64:
+        try:
+            content = base64.b64decode(env_b64).decode("utf-8")
+            with open(COOKIES_PATH, "w") as f:
+                f.write(content)
+            return COOKIES_PATH
+        except Exception as e:
+            print(f"[YouTube] Failed to decode YOUTUBE_COOKIES_B64: {e}")
+
+    # Fall back to raw env var
     env_cookies = os.getenv("YOUTUBE_COOKIES")
     if env_cookies:
-        # Railway/some UIs replace real newlines with literal \n — fix that
         content = env_cookies.replace("\\n", "\n").replace("\\t", "\t")
         with open(COOKIES_PATH, "w") as f:
             f.write(content)
         return COOKIES_PATH
+
     local = Path(__file__).resolve().parent.parent.parent / "cookies.txt"
     if local.exists():
         return str(local)
