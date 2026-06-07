@@ -1,6 +1,5 @@
 import re
 from datetime import datetime, timedelta, timezone
-from typing import Optional, Union
 
 import discord
 from discord import app_commands
@@ -29,10 +28,7 @@ class Events(commands.Cog):
         name="Event name",
         date="Date (YYYY-MM-DD or DD/MM/YYYY)",
         time="Start time in UTC (HH:MM, 24-hour)",
-        description="Event description",
         duration="Duration in minutes (default: 60)",
-        channel="Voice or stage channel (leave blank for external event)",
-        location="Location name if not in a channel",
     )
     @commands.has_permissions(administrator=True)
     @app_commands.default_permissions(administrator=True)
@@ -42,10 +38,7 @@ class Events(commands.Cog):
         name: str,
         date: str,
         time: str,
-        description: str = "",
         duration: int = 60,
-        channel: Optional[Union[discord.VoiceChannel, discord.StageChannel]] = None,
-        location: str = "",
     ):
         await ctx.defer()
 
@@ -60,29 +53,13 @@ class Events(commands.Cog):
         end = start + timedelta(minutes=duration)
 
         try:
-            if channel:
-                entity_type = (
-                    discord.EntityType.stage_instance
-                    if isinstance(channel, discord.StageChannel)
-                    else discord.EntityType.voice
-                )
-                event = await ctx.guild.create_scheduled_event(
-                    name=name,
-                    description=description or None,
-                    start_time=start,
-                    end_time=end,
-                    entity_type=entity_type,
-                    channel=channel,
-                )
-            else:
-                event = await ctx.guild.create_scheduled_event(
-                    name=name,
-                    description=description or None,
-                    start_time=start,
-                    end_time=end,
-                    entity_type=discord.EntityType.external,
-                    location=location or "TBD",
-                )
+            event = await ctx.guild.create_scheduled_event(
+                name=name,
+                start_time=start,
+                end_time=end,
+                entity_type=discord.EntityType.external,
+                location="TBD",
+            )
         except discord.Forbidden:
             return await ctx.send("I don't have permission to create events.")
         except Exception as e:
@@ -95,12 +72,6 @@ class Events(commands.Cog):
         )
         embed.add_field(name="Start", value=f"<t:{int(start.timestamp())}:F>", inline=True)
         embed.add_field(name="Duration", value=f"{duration} min", inline=True)
-        if channel:
-            embed.add_field(name="Channel", value=channel.mention, inline=True)
-        elif location:
-            embed.add_field(name="Location", value=location, inline=True)
-        if description:
-            embed.add_field(name="Description", value=description, inline=False)
 
         await ctx.send(embed=embed)
 
