@@ -18,6 +18,7 @@ COGS = [
     "cogs.moderation",
     "cogs.welcome",
     "cogs.events",
+    "cogs.tickets",
 ]
 
 intents = discord.Intents.default()
