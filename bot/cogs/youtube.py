@@ -26,7 +26,6 @@ def _setup_cookies() -> str | None:
 
 def _make_ytdl_opts(cookies_path: str | None) -> dict:
     opts = {
-        "format": "bestaudio[ext=webm]/bestaudio[ext=m4a]/bestaudio[ext=mp4]/bestaudio/best",
         "noplaylist": True,
         "quiet": True,
         "no_warnings": True,
@@ -57,6 +56,14 @@ def fetch_info(query: str, opts: dict) -> dict:
 def fetch_stream_url(webpage_url: str, opts: dict) -> str:
     with yt_dlp.YoutubeDL(opts) as ydl:
         info = ydl.extract_info(webpage_url, download=False)
+        if "entries" in info:
+            info = info["entries"][0]
+        formats = info.get("formats", [])
+        # Prefer audio-only formats sorted by quality
+        audio = [f for f in formats if f.get("vcodec") == "none" and f.get("url")]
+        if audio:
+            return audio[-1]["url"]
+        # Fall back to any format with a direct URL
         return info["url"]
 
 
