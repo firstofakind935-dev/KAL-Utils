@@ -26,6 +26,7 @@ def _setup_cookies() -> str | None:
 
 def _make_ytdl_opts(cookies_path: str | None) -> dict:
     opts = {
+        "format": "18/17/36/best",  # legacy progressive formats — no PO token required
         "noplaylist": True,
         "quiet": True,
         "no_warnings": True,
