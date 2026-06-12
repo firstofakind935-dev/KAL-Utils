@@ -143,6 +143,21 @@ def create_app():
         plan = row_to_plan(row)
         return render_template("plan.html", plan=plan)
 
+    # ── Delete action ────────────────────────────────────────────────────────
+
+    @app.route("/plan/<int:plan_id>/delete", methods=["POST"])
+    @login_required
+    def plan_delete(plan_id):
+        conn = get_db()
+        try:
+            conn.execute("DELETE FROM flight_plans WHERE id = ?", (plan_id,))
+            conn.commit()
+        finally:
+            conn.close()
+
+        flash(f"Flight Plan #{plan_id} has been permanently deleted.", "success")
+        return redirect(url_for("dashboard"))
+
     # ── Review action ─────────────────────────────────────────────────────────
 
     @app.route("/plan/<int:plan_id>/review", methods=["POST"])
