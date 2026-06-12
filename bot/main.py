@@ -1,6 +1,7 @@
 import asyncio
 import os
 import sys
+import threading
 from pathlib import Path
 
 import discord
@@ -20,6 +21,7 @@ COGS = [
     "cogs.events",
     "cogs.tickets",
     "cogs.youtube",
+    "cogs.flightplan",
 ]
 
 intents = discord.Intents.default()
@@ -84,10 +86,21 @@ async def sync(ctx: commands.Context):
     await ctx.send(f"Synced {len(synced)} slash commands to this server!")
 
 
+def _start_web(bot_instance):
+    from web.app import create_app, set_bot
+    set_bot(bot_instance)
+    app = create_app()
+    port = int(os.getenv("PORT", 8080))
+    print(f"[Web] Starting staff console on port {port}")
+    app.run(host="0.0.0.0", port=port, use_reloader=False)
+
+
 async def main():
     token = os.getenv("DISCORD_TOKEN")
     if not token:
         raise RuntimeError("DISCORD_TOKEN is not set in .env")
+    web_thread = threading.Thread(target=_start_web, args=(bot,), daemon=True)
+    web_thread.start()
     async with bot:
         await bot.start(token)
 

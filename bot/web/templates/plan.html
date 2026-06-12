@@ -1,0 +1,226 @@
+{% extends "base.html" %}
+
+{% block content %}
+
+{# ── Header ── #}
+<div class="mb-3">
+  <a href="{{ url_for('dashboard') }}" class="text-decoration-none text-muted small">← Back to Dashboard</a>
+</div>
+
+<div class="d-flex align-items-center gap-2 mb-4">
+  <h4 class="mb-0 fw-bold">Flight Plan #{{ plan.id }}</h4>
+  {% if plan.type == 'commercial' %}
+    <span class="badge" style="background:#00A4E4;">Commercial</span>
+  {% elif plan.type == 'training' %}
+    <span class="badge" style="background:#2ECC71;">Training</span>
+  {% elif plan.type == 'evaluation' %}
+    <span class="badge" style="background:#E74C3C;">Evaluation</span>
+  {% else %}
+    <span class="badge bg-secondary">{{ plan.type }}</span>
+  {% endif %}
+  {% if plan.status == 'pending' %}
+    <span class="badge" style="background:#F39C12;">Pending</span>
+  {% elif plan.status == 'approved' %}
+    <span class="badge" style="background:#27AE60;">Approved</span>
+  {% elif plan.status == 'rejected' %}
+    <span class="badge" style="background:#C0392B;">Rejected</span>
+  {% else %}
+    <span class="badge bg-secondary">{{ plan.status }}</span>
+  {% endif %}
+</div>
+
+<div class="row g-4">
+
+  {# ── Left column: plan info + review info ── #}
+  <div class="col-lg-8">
+
+    {# Plan details card #}
+    <div class="card shadow-sm mb-4">
+      <div class="card-header fw-semibold">Plan Details</div>
+      <div class="card-body">
+        <dl class="row mb-0">
+          <dt class="col-sm-4">Submitted By</dt>
+          <dd class="col-sm-8">{{ plan.submitted_by_name or '—' }}</dd>
+
+          <dt class="col-sm-4">Submitted At</dt>
+          <dd class="col-sm-8">{{ plan.submitted_at or '—' }}</dd>
+
+          {% if plan.type == 'commercial' %}
+            <dt class="col-sm-4">Flight Number</dt>
+            <dd class="col-sm-8">{{ plan.data.get('flight_number', '—') }}</dd>
+
+            <dt class="col-sm-4">Departure</dt>
+            <dd class="col-sm-8">{{ plan.data.get('departure', '—') }}</dd>
+
+            <dt class="col-sm-4">Arrival</dt>
+            <dd class="col-sm-8">{{ plan.data.get('arrival', '—') }}</dd>
+
+            {% if plan.data.get('aircraft') %}
+            <dt class="col-sm-4">Aircraft</dt>
+            <dd class="col-sm-8">{{ plan.data.get('aircraft') }}</dd>
+            {% endif %}
+
+            {% if plan.data.get('departure_time') %}
+            <dt class="col-sm-4">Departure Time</dt>
+            <dd class="col-sm-8">{{ plan.data.get('departure_time') }}</dd>
+            {% endif %}
+
+            {% if plan.data.get('route') %}
+            <dt class="col-sm-4">Route</dt>
+            <dd class="col-sm-8"><code>{{ plan.data.get('route') }}</code></dd>
+            {% endif %}
+
+            {% if plan.data.get('altitude') %}
+            <dt class="col-sm-4">Altitude</dt>
+            <dd class="col-sm-8">{{ plan.data.get('altitude') }}</dd>
+            {% endif %}
+
+            {% if plan.data.get('remarks') %}
+            <dt class="col-sm-4">Remarks</dt>
+            <dd class="col-sm-8">{{ plan.data.get('remarks') }}</dd>
+            {% endif %}
+
+          {% elif plan.type == 'training' %}
+            <dt class="col-sm-4">Trainee</dt>
+            <dd class="col-sm-8">{{ plan.data.get('trainee', '—') }}</dd>
+
+            <dt class="col-sm-4">Trainer</dt>
+            <dd class="col-sm-8">{{ plan.data.get('trainer', '—') }}</dd>
+
+            {% if plan.data.get('training_type') %}
+            <dt class="col-sm-4">Training Type</dt>
+            <dd class="col-sm-8">{{ plan.data.get('training_type') }}</dd>
+            {% endif %}
+
+            {% if plan.data.get('airport') %}
+            <dt class="col-sm-4">Airport</dt>
+            <dd class="col-sm-8">{{ plan.data.get('airport') }}</dd>
+            {% endif %}
+
+            {% if plan.data.get('scheduled_time') %}
+            <dt class="col-sm-4">Scheduled Time</dt>
+            <dd class="col-sm-8">{{ plan.data.get('scheduled_time') }}</dd>
+            {% endif %}
+
+            {% if plan.data.get('remarks') %}
+            <dt class="col-sm-4">Remarks</dt>
+            <dd class="col-sm-8">{{ plan.data.get('remarks') }}</dd>
+            {% endif %}
+
+          {% elif plan.type == 'evaluation' %}
+            <dt class="col-sm-4">Examinee</dt>
+            <dd class="col-sm-8">{{ plan.data.get('examinee', '—') }}</dd>
+
+            <dt class="col-sm-4">Examiner</dt>
+            <dd class="col-sm-8">{{ plan.data.get('examiner', '—') }}</dd>
+
+            {% if plan.data.get('evaluation_type') %}
+            <dt class="col-sm-4">Evaluation Type</dt>
+            <dd class="col-sm-8">{{ plan.data.get('evaluation_type') }}</dd>
+            {% endif %}
+
+            {% if plan.data.get('airport') %}
+            <dt class="col-sm-4">Airport</dt>
+            <dd class="col-sm-8">{{ plan.data.get('airport') }}</dd>
+            {% endif %}
+
+            {% if plan.data.get('scheduled_time') %}
+            <dt class="col-sm-4">Scheduled Time</dt>
+            <dd class="col-sm-8">{{ plan.data.get('scheduled_time') }}</dd>
+            {% endif %}
+
+            {% if plan.data.get('remarks') %}
+            <dt class="col-sm-4">Remarks</dt>
+            <dd class="col-sm-8">{{ plan.data.get('remarks') }}</dd>
+            {% endif %}
+
+          {% else %}
+            {# Fallback: render all data keys #}
+            {% for key, value in plan.data.items() %}
+            <dt class="col-sm-4">{{ key.replace('_', ' ').title() }}</dt>
+            <dd class="col-sm-8">{{ value }}</dd>
+            {% endfor %}
+          {% endif %}
+        </dl>
+      </div>
+    </div>
+
+    {# Review info card (only if reviewed) #}
+    {% if plan.reviewed_by %}
+    <div class="card shadow-sm">
+      <div class="card-header fw-semibold">Review Information</div>
+      <div class="card-body">
+        <dl class="row mb-0">
+          <dt class="col-sm-4">Reviewed By</dt>
+          <dd class="col-sm-8">{{ plan.reviewed_by }}</dd>
+
+          <dt class="col-sm-4">Reviewed At</dt>
+          <dd class="col-sm-8">{{ plan.reviewed_at or '—' }}</dd>
+
+          {% if plan.notes %}
+          <dt class="col-sm-4">Notes</dt>
+          <dd class="col-sm-8">{{ plan.notes }}</dd>
+          {% endif %}
+        </dl>
+      </div>
+    </div>
+    {% endif %}
+
+  </div>{# /left column #}
+
+  {# ── Right column: review actions (only if pending) ── #}
+  {% if plan.status == 'pending' %}
+  <div class="col-lg-4">
+
+    {# Approve card #}
+    <div class="card shadow-sm mb-3 border-success">
+      <div class="card-header text-white fw-semibold" style="background:#27AE60;">Approve Plan</div>
+      <div class="card-body">
+        <form method="post" action="{{ url_for('plan_review', plan_id=plan.id) }}">
+          <input type="hidden" name="action" value="approve">
+          <div class="mb-3">
+            <label for="approve-notes" class="form-label small">Notes <span class="text-muted">(optional)</span></label>
+            <textarea
+              id="approve-notes"
+              name="notes"
+              class="form-control form-control-sm"
+              rows="3"
+              placeholder="Optional approval notes…"
+            ></textarea>
+          </div>
+          <div class="d-grid">
+            <button type="submit" class="btn btn-success">Approve</button>
+          </div>
+        </form>
+      </div>
+    </div>
+
+    {# Reject card #}
+    <div class="card shadow-sm border-danger">
+      <div class="card-header text-white fw-semibold" style="background:#C0392B;">Reject Plan</div>
+      <div class="card-body">
+        <form method="post" action="{{ url_for('plan_review', plan_id=plan.id) }}">
+          <input type="hidden" name="action" value="reject">
+          <div class="mb-3">
+            <label for="reject-notes" class="form-label small">Notes <span class="text-danger">*</span></label>
+            <textarea
+              id="reject-notes"
+              name="notes"
+              class="form-control form-control-sm"
+              rows="3"
+              placeholder="Reason for rejection…"
+              required
+            ></textarea>
+          </div>
+          <div class="d-grid">
+            <button type="submit" class="btn btn-danger">Reject</button>
+          </div>
+        </form>
+      </div>
+    </div>
+
+  </div>
+  {% endif %}
+
+</div>{# /row #}
+{% endblock %}
