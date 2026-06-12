@@ -80,9 +80,13 @@ async def ping(ctx: commands.Context):
 @bot.command(name="sync")
 @commands.has_permissions(administrator=True)
 async def sync(ctx: commands.Context):
-    """Force a global slash command sync."""
+    """Clear guild command overrides (fixes duplicates) and re-sync globally."""
+    # Wipe guild-specific overrides that cause double commands
+    bot.tree.clear_commands(guild=ctx.guild)
+    await bot.tree.sync(guild=ctx.guild)
+    # Push fresh global list
     synced = await bot.tree.sync()
-    await ctx.send(f"Synced {len(synced)} slash commands globally!")
+    await ctx.send(f"Cleared guild overrides and synced {len(synced)} commands globally!")
 
 
 def _start_web(bot_instance):
