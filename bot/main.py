@@ -80,10 +80,9 @@ async def ping(ctx: commands.Context):
 @bot.command(name="sync")
 @commands.has_permissions(administrator=True)
 async def sync(ctx: commands.Context):
-    """Sync slash commands to this server instantly."""
-    bot.tree.copy_global_to(guild=ctx.guild)
-    synced = await bot.tree.sync(guild=ctx.guild)
-    await ctx.send(f"Synced {len(synced)} slash commands to this server!")
+    """Force a global slash command sync."""
+    synced = await bot.tree.sync()
+    await ctx.send(f"Synced {len(synced)} slash commands globally!")
 
 
 def _start_web(bot_instance):
