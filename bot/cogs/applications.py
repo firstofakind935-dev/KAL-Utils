@@ -376,5 +376,46 @@ class Applications(commands.Cog):
         )
 
 
+    @commands.hybrid_command(
+        name="testapplication",
+        description="[Admin] Send the application questions to yourself as a DM test",
+    )
+    @commands.has_permissions(administrator=True)
+    @app_commands.default_permissions(administrator=True)
+    @commands.guild_only()
+    async def testapplication(self, ctx: commands.Context):
+        """DM the admin all question embeds in order — nothing is saved."""
+        try:
+            intro = discord.Embed(
+                title="✈️ Korean Air Application — Test Mode",
+                description=(
+                    f"Sending you all **{len(QUESTIONS)} question embeds** as a preview.\n"
+                    "Nothing will be saved."
+                ),
+                color=QUESTION_COLOR,
+            )
+            await ctx.author.send(embed=intro)
+        except discord.Forbidden:
+            await ctx.send("I couldn't DM you. Enable Direct Messages from server members and try again.", ephemeral=True)
+            return
+
+        await ctx.send("📬 Check your DMs — sending the test questions now.", ephemeral=True)
+
+        for i, (dm_text, _) in enumerate(QUESTIONS, start=1):
+            q_embed = discord.Embed(
+                title=f"Question {i}",
+                description=dm_text,
+                color=QUESTION_COLOR,
+            )
+            await ctx.author.send(embed=q_embed)
+
+        done_embed = discord.Embed(
+            title="✅ Test Complete",
+            description="That's all the questions. Nothing was saved.",
+            color=QUESTION_COLOR,
+        )
+        await ctx.author.send(embed=done_embed)
+
+
 async def setup(bot: commands.Bot):
     await bot.add_cog(Applications(bot))
