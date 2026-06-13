@@ -215,6 +215,51 @@ class Applications(commands.Cog):
 
             answers.append({"question": plain_text, "answer": content[:1000]})
 
+        # ── Confirmation step ──
+        confirm_embed = discord.Embed(
+            title="📋 Ready to Submit",
+            description=(
+                "You've answered all the questions.\n"
+                "Press **Submit** to send your application, or **Cancel** to discard it."
+            ),
+            color=QUESTION_COLOR,
+        )
+
+        class ConfirmView(discord.ui.View):
+            def __init__(self):
+                super().__init__(timeout=120)
+                self.choice: str | None = None
+
+            @discord.ui.button(label="Submit", style=discord.ButtonStyle.success)
+            async def submit(self, interaction: discord.Interaction, button: discord.ui.Button):
+                self.choice = "submit"
+                self.stop()
+                await interaction.response.defer()
+
+            @discord.ui.button(label="Cancel", style=discord.ButtonStyle.danger)
+            async def cancel(self, interaction: discord.Interaction, button: discord.ui.Button):
+                self.choice = "cancel"
+                self.stop()
+                await interaction.response.defer()
+
+        view = ConfirmView()
+        confirm_msg = await user.send(embed=confirm_embed, view=view)
+        await view.wait()
+
+        # Disable buttons after interaction
+        for item in view.children:
+            item.disabled = True
+        await confirm_msg.edit(view=view)
+
+        if view.choice != "submit":
+            cancel_embed = discord.Embed(
+                title="❌ Application Cancelled",
+                description="Run `/apply` in the server if you change your mind.",
+                color=0xE74C3C,
+            )
+            await user.send(embed=cancel_embed)
+            return
+
         submitted_at = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
         answers_json = json.dumps(answers, ensure_ascii=False)
 
