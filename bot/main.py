@@ -41,15 +41,16 @@ class KALBot(commands.Bot):
                 print(f"  [OK] Loaded: {cog}")
             except Exception as e:
                 print(f"  [ERROR] Failed to load {cog}: {e}")
-        synced = await self.tree.sync()
-        print(f"  Synced {len(synced)} slash commands globally")
+        cmds = self.tree.get_commands()
+        print(f"  Commands in tree: {[c.name for c in cmds]}")
 
     async def on_ready(self):
         print(f"\nLogged in as {self.user} (ID: {self.user.id})")
         print(f"Serving {len(self.guilds)} guild(s)")
         for guild in self.guilds:
             try:
-                synced = await self.tree.sync(guild=discord.Object(id=guild.id))
+                self.tree.copy_global_to(guild=guild)
+                synced = await self.tree.sync(guild=guild)
                 print(f"  Synced {len(synced)} commands to: {guild.name}")
             except Exception as e:
                 print(f"  [ERROR] Guild sync failed for {guild.name}: {e}")
@@ -93,10 +94,9 @@ async def ping(ctx: commands.Context):
 @app_commands.default_permissions(administrator=True)
 async def sync(ctx: commands.Context):
     """Clear guild command overrides (fixes duplicates) and re-sync globally."""
-    bot.tree.clear_commands(guild=ctx.guild)
-    await bot.tree.sync(guild=ctx.guild)
-    synced = await bot.tree.sync()
-    await ctx.send(f"Cleared guild overrides and synced {len(synced)} commands globally!", ephemeral=True)
+    bot.tree.copy_global_to(guild=ctx.guild)
+    synced = await bot.tree.sync(guild=ctx.guild)
+    await ctx.send(f"Synced {len(synced)} commands to this server!", ephemeral=True)
 
 
 def _start_web(bot_instance):
