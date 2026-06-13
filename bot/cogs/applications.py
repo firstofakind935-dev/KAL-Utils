@@ -13,6 +13,7 @@ from db.database import DB_PATH
 # ---------------------------------------------------------------------------
 
 KAL_BLUE = 0x00A4E4
+QUESTION_COLOR = 0x9DD9E5
 
 STATUS_EMOJI = {
     "pending": "⏳",
@@ -186,11 +187,10 @@ class Applications(commands.Cog):
         answers = []
         for i, (dm_text, plain_text) in enumerate(QUESTIONS, start=1):
             q_embed = discord.Embed(
-                title=f"Question {i} of {len(QUESTIONS)}",
+                title=f"Question {i}",
                 description=dm_text,
-                color=KAL_BLUE,
+                color=QUESTION_COLOR,
             )
-            q_embed.set_footer(text="Type your answer below • Type 'cancel' to abort")
             await user.send(embed=q_embed)
             try:
                 reply = await self.bot.wait_for("message", check=check, timeout=ANSWER_TIMEOUT)
