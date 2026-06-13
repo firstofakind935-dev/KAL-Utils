@@ -328,6 +328,10 @@ def create_app():
             flash("Invalid action.", "danger")
             return redirect(url_for("application_detail", app_id=app_id))
 
+        if action == "reject" and not notes:
+            flash("A reason for denial is required when rejecting an application.", "danger")
+            return redirect(url_for("application_detail", app_id=app_id))
+
         new_status = "approved" if action == "approve" else "rejected"
 
         conn = get_db()
@@ -381,15 +385,33 @@ def create_app():
                 if user_id:
                     try:
                         user = await _bot.fetch_user(int(user_id))
-                        dm_embed = discord.Embed(
-                            title=f"📋 Your Korean Air application was {action_word.lower()}",
-                            description=(
-                                f"Application `#{app_id}` has been **{action_word.lower()}**."
-                            ),
-                            colour=colour,
-                        )
-                        if notes:
-                            dm_embed.add_field(name="Notes", value=notes, inline=False)
+                        if new_status == "approved":
+                            dm_embed = discord.Embed(
+                                title="Accepted",
+                                description=(
+                                    "Congratulations! Your application for the Korean24 Program "
+                                    "has been accepted.\n\n"
+                                    "Please proceed to the Pilot Hub, where you'll find all the "
+                                    "information and resources you need to begin your journey. "
+                                    "We look forward to seeing you in the skies, happy flying!"
+                                ),
+                                colour=0x2ECC71,
+                            )
+                        else:
+                            dm_embed = discord.Embed(
+                                title="Rejected",
+                                description=(
+                                    "Your application for the Korean24 Program has been rejected. "
+                                    "Please do not be disheartened. "
+                                    "You can always come back and apply again."
+                                ),
+                                colour=0xE74C3C,
+                            )
+                            dm_embed.add_field(
+                                name="Reason For Denial",
+                                value=notes,
+                                inline=False,
+                            )
                         await user.send(embed=dm_embed)
                     except Exception:
                         pass

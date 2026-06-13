@@ -253,8 +253,10 @@ class Applications(commands.Cog):
 
         if view.choice != "submit":
             cancel_embed = discord.Embed(
-                title="❌ Application Cancelled",
-                description="Run `/apply` in the server if you change your mind.",
+                title="Cancelled",
+                description=(
+                    "Your application has been cancelled and is not sent to the team for review."
+                ),
                 color=0xE74C3C,
             )
             await user.send(embed=cancel_embed)
@@ -295,10 +297,18 @@ class Applications(commands.Cog):
             "review_notes": None,
         }
 
-        confirm = application_embed(app_row)
-        confirm.title = f"✅ Application #{app_id} Submitted"
-        confirm.description = "Your application is **pending review**. You'll receive a DM when a decision is made."
-        await user.send(embed=confirm)
+        submitted_embed = discord.Embed(
+            title="Submitted",
+            description=(
+                "Your application has been successfully submitted and is now pending review. "
+                "Please allow up to 24 hours for our team to process your application.\n\n"
+                "You will receive a direct message from me once a decision has been made. "
+                "To help us manage applications efficiently, please do not make a ticket, "
+                "DM or contact staff members regarding the status of your application."
+            ),
+            color=QUESTION_COLOR,
+        )
+        await user.send(embed=submitted_embed)
 
         if notification_channel_id:
             channel = guild.get_channel(int(notification_channel_id))
