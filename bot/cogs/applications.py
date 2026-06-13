@@ -78,6 +78,142 @@ def application_embed(app_row: dict) -> discord.Embed:
 
 
 # ---------------------------------------------------------------------------
+# Review UI (posted to staff channel with each new application)
+# ---------------------------------------------------------------------------
+
+class RejectReasonModal(discord.ui.Modal, title="Reject Application"):
+    reason = discord.ui.TextInput(
+        label="Reason for Denial",
+        style=discord.TextStyle.paragraph,
+        placeholder="Why is this application being rejected?",
+        required=True,
+        max_length=1000,
+    )
+
+    def __init__(
+        self,
+        app_id: int,
+        user_id: str,
+        user_name: str,
+        cog: "Applications",
+        review_view: "ApplicationReviewView",
+        original_message: discord.Message,
+    ):
+        super().__init__()
+        self.app_id = app_id
+        self.user_id = user_id
+        self.user_name = user_name
+        self.cog = cog
+        self.review_view = review_view
+        self.original_message = original_message
+
+    async def on_submit(self, interaction: discord.Interaction):
+        reason = self.reason.value.strip()
+        reviewer = interaction.user.display_name
+
+        async with aiosqlite.connect(DB_PATH) as db:
+            await db.execute(
+                """UPDATE applications
+                   SET status='rejected', reviewed_by=?, reviewed_at=datetime('now'), review_notes=?
+                   WHERE id=?""",
+                (reviewer, reason, self.app_id),
+            )
+            await db.commit()
+
+        try:
+            applicant = await self.cog.bot.fetch_user(int(self.user_id))
+            dm_embed = discord.Embed(
+                title="Rejected",
+                description=(
+                    "Your application for the Korean24 Program has been rejected. "
+                    "Please do not be disheartened. "
+                    "You can always come back and apply again."
+                ),
+                color=0xE74C3C,
+            )
+            dm_embed.add_field(name="Reason For Denial", value=reason, inline=False)
+            await applicant.send(embed=dm_embed)
+        except Exception:
+            pass
+
+        result_embed = discord.Embed(
+            title=f"Application #{self.app_id} — ❌ Rejected",
+            color=0xE74C3C,
+        )
+        result_embed.add_field(name="Applicant", value=self.user_name, inline=True)
+        result_embed.add_field(name="Reviewed By", value=reviewer, inline=True)
+        result_embed.add_field(name="Reason", value=reason, inline=False)
+
+        for item in self.review_view.children:
+            item.disabled = True
+        try:
+            await self.original_message.edit(embed=result_embed, view=self.review_view)
+        except Exception:
+            pass
+
+        await interaction.response.send_message(
+            f"Application #{self.app_id} rejected.", ephemeral=True
+        )
+
+
+class ApplicationReviewView(discord.ui.View):
+    def __init__(self, app_id: int, user_id: str, user_name: str, cog: "Applications"):
+        super().__init__(timeout=None)
+        self.app_id = app_id
+        self.user_id = user_id
+        self.user_name = user_name
+        self.cog = cog
+
+    @discord.ui.button(label="Approve", style=discord.ButtonStyle.success)
+    async def approve_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
+        reviewer = interaction.user.display_name
+
+        async with aiosqlite.connect(DB_PATH) as db:
+            await db.execute(
+                """UPDATE applications
+                   SET status='approved', reviewed_by=?, reviewed_at=datetime('now')
+                   WHERE id=?""",
+                (reviewer, self.app_id),
+            )
+            await db.commit()
+
+        try:
+            applicant = await self.cog.bot.fetch_user(int(self.user_id))
+            dm_embed = discord.Embed(
+                title="Accepted",
+                description=(
+                    "Congratulations! Your application for the Korean24 Program has been accepted.\n\n"
+                    "Please proceed to the Pilot Hub, where you'll find all the information and "
+                    "resources you need to begin your journey. We look forward to seeing you in the "
+                    "skies, happy flying!"
+                ),
+                color=0x2ECC71,
+            )
+            await applicant.send(embed=dm_embed)
+        except Exception:
+            pass
+
+        result_embed = discord.Embed(
+            title=f"Application #{self.app_id} — ✅ Approved",
+            color=0x2ECC71,
+        )
+        result_embed.add_field(name="Applicant", value=self.user_name, inline=True)
+        result_embed.add_field(name="Reviewed By", value=reviewer, inline=True)
+
+        for item in self.children:
+            item.disabled = True
+        await interaction.response.edit_message(embed=result_embed, view=self)
+
+    @discord.ui.button(label="Reject", style=discord.ButtonStyle.danger)
+    async def reject_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
+        modal = RejectReasonModal(
+            self.app_id, self.user_id, self.user_name,
+            self.cog, self, interaction.message,
+        )
+        await interaction.response.send_modal(modal)
+
+
+# ---------------------------------------------------------------------------
 # Cog
 # ---------------------------------------------------------------------------
 
@@ -318,8 +454,9 @@ class Applications(commands.Cog):
                     name="New Application Submitted",
                     icon_url=user.display_avatar.url,
                 )
+                review_view = ApplicationReviewView(app_id, str(user.id), user.display_name, self)
                 try:
-                    await channel.send(embed=notify_embed)
+                    await channel.send(embed=notify_embed, view=review_view)
                 except discord.Forbidden:
                     pass
 

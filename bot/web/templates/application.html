@@ -86,61 +86,14 @@
 
   </div>{# /left column #}
 
-  {# ── Right column: review actions (only if pending) ── #}
+  {# ── Right column: pending notice ── #}
   {% if application.status == 'pending' %}
   <div class="col-lg-4">
-
-    {# Approve card #}
-    <div class="card shadow-sm mb-3 border-success">
-      <div class="card-header text-white fw-semibold" style="background:#27AE60;">Approve Application</div>
-      <div class="card-body">
-        <form method="post" action="{{ url_for('application_review', app_id=application.id) }}">
-          <input type="hidden" name="action" value="approve">
-          <div class="mb-3">
-            <label for="approve-notes" class="form-label small">Notes <span class="text-muted">(optional)</span></label>
-            <textarea
-              id="approve-notes"
-              name="notes"
-              class="form-control form-control-sm"
-              rows="3"
-              placeholder="Optional approval notes…"
-            ></textarea>
-          </div>
-          <div class="d-grid">
-            <button type="submit" class="btn btn-success">Approve</button>
-          </div>
-        </form>
+    <div class="card shadow-sm border-warning">
+      <div class="card-body text-muted small">
+        ⏳ This application is <strong>pending review</strong>. Use the <strong>Approve</strong> and <strong>Reject</strong> buttons on the Discord notification embed to action it.
       </div>
     </div>
-
-    {# Reject card #}
-    <div class="card shadow-sm border-danger">
-      <div class="card-header text-white fw-semibold" style="background:#C0392B;">Reject Application</div>
-      <div class="card-body">
-        <form method="post" action="{{ url_for('application_review', app_id=application.id) }}">
-          <input type="hidden" name="action" value="reject">
-          <div class="mb-3">
-            <label for="reject-notes" class="form-label small">Notes <span class="text-danger">*</span></label>
-            <textarea
-              id="reject-notes"
-              name="notes"
-              class="form-control form-control-sm"
-              rows="3"
-              placeholder="Reason for rejection…"
-              required
-            ></textarea>
-          </div>
-          <div class="d-grid">
-            <button type="submit" class="btn btn-danger">Reject</button>
-          </div>
-        </form>
-      </div>
-    </div>
-
-    <p class="text-muted small mt-2 mb-0">
-      The applicant will be notified by DM and the decision will be posted to the staff channel.
-    </p>
-
   </div>
   {% endif %}
 
