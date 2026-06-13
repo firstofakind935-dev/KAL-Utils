@@ -1,0 +1,148 @@
+{% extends "base.html" %}
+
+{% block content %}
+
+{# ── Header ── #}
+<div class="mb-3">
+  <a href="{{ url_for('applications') }}" class="text-decoration-none text-muted small">← Back to Applications</a>
+</div>
+
+<div class="d-flex align-items-center gap-2 mb-4">
+  <h4 class="mb-0 fw-bold">Application #{{ application.id }}</h4>
+  {% if application.status == 'pending' %}
+    <span class="badge" style="background:#F39C12;">Pending</span>
+  {% elif application.status == 'approved' %}
+    <span class="badge" style="background:#27AE60;">Approved</span>
+  {% elif application.status == 'rejected' %}
+    <span class="badge" style="background:#C0392B;">Rejected</span>
+  {% else %}
+    <span class="badge bg-secondary">{{ application.status }}</span>
+  {% endif %}
+  <form method="post" action="{{ url_for('application_delete', app_id=application.id) }}" class="ms-auto"
+        onsubmit="return confirm('Permanently delete Application #{{ application.id }}? This cannot be undone.');">
+    <button type="submit" class="btn btn-sm btn-outline-danger">🗑 Delete</button>
+  </form>
+</div>
+
+<div class="row g-4">
+
+  {# ── Left column: applicant info + answers + review info ── #}
+  <div class="col-lg-8">
+
+    {# Applicant card #}
+    <div class="card shadow-sm mb-4">
+      <div class="card-header fw-semibold">Applicant</div>
+      <div class="card-body">
+        <dl class="row mb-0">
+          <dt class="col-sm-4">Discord User</dt>
+          <dd class="col-sm-8">{{ application.user_name or '—' }}</dd>
+
+          <dt class="col-sm-4">Discord ID</dt>
+          <dd class="col-sm-8"><code>{{ application.user_id }}</code></dd>
+
+          <dt class="col-sm-4">Submitted At</dt>
+          <dd class="col-sm-8">{{ application.submitted_at or '—' }}</dd>
+        </dl>
+      </div>
+    </div>
+
+    {# Answers card #}
+    <div class="card shadow-sm mb-4">
+      <div class="card-header fw-semibold">Answers</div>
+      <div class="card-body">
+        {% if application.answers %}
+          {% for qa in application.answers %}
+          <div class="{% if not loop.last %}mb-3 pb-3 border-bottom{% endif %}">
+            <div class="small fw-semibold text-muted">Q{{ loop.index }}. {{ qa.question }}</div>
+            <div>{{ qa.answer or '—' }}</div>
+          </div>
+          {% endfor %}
+        {% else %}
+          <p class="text-muted mb-0">No answers recorded.</p>
+        {% endif %}
+      </div>
+    </div>
+
+    {# Review info card (only if reviewed) #}
+    {% if application.reviewed_by %}
+    <div class="card shadow-sm">
+      <div class="card-header fw-semibold">Review Information</div>
+      <div class="card-body">
+        <dl class="row mb-0">
+          <dt class="col-sm-4">Reviewed By</dt>
+          <dd class="col-sm-8">{{ application.reviewed_by }}</dd>
+
+          <dt class="col-sm-4">Reviewed At</dt>
+          <dd class="col-sm-8">{{ application.reviewed_at or '—' }}</dd>
+
+          {% if application.review_notes %}
+          <dt class="col-sm-4">Notes</dt>
+          <dd class="col-sm-8">{{ application.review_notes }}</dd>
+          {% endif %}
+        </dl>
+      </div>
+    </div>
+    {% endif %}
+
+  </div>{# /left column #}
+
+  {# ── Right column: review actions (only if pending) ── #}
+  {% if application.status == 'pending' %}
+  <div class="col-lg-4">
+
+    {# Approve card #}
+    <div class="card shadow-sm mb-3 border-success">
+      <div class="card-header text-white fw-semibold" style="background:#27AE60;">Approve Application</div>
+      <div class="card-body">
+        <form method="post" action="{{ url_for('application_review', app_id=application.id) }}">
+          <input type="hidden" name="action" value="approve">
+          <div class="mb-3">
+            <label for="approve-notes" class="form-label small">Notes <span class="text-muted">(optional)</span></label>
+            <textarea
+              id="approve-notes"
+              name="notes"
+              class="form-control form-control-sm"
+              rows="3"
+              placeholder="Optional approval notes…"
+            ></textarea>
+          </div>
+          <div class="d-grid">
+            <button type="submit" class="btn btn-success">Approve</button>
+          </div>
+        </form>
+      </div>
+    </div>
+
+    {# Reject card #}
+    <div class="card shadow-sm border-danger">
+      <div class="card-header text-white fw-semibold" style="background:#C0392B;">Reject Application</div>
+      <div class="card-body">
+        <form method="post" action="{{ url_for('application_review', app_id=application.id) }}">
+          <input type="hidden" name="action" value="reject">
+          <div class="mb-3">
+            <label for="reject-notes" class="form-label small">Notes <span class="text-danger">*</span></label>
+            <textarea
+              id="reject-notes"
+              name="notes"
+              class="form-control form-control-sm"
+              rows="3"
+              placeholder="Reason for rejection…"
+              required
+            ></textarea>
+          </div>
+          <div class="d-grid">
+            <button type="submit" class="btn btn-danger">Reject</button>
+          </div>
+        </form>
+      </div>
+    </div>
+
+    <p class="text-muted small mt-2 mb-0">
+      The applicant will be notified by DM and the decision will be posted to the staff channel.
+    </p>
+
+  </div>
+  {% endif %}
+
+</div>{# /row #}
+{% endblock %}

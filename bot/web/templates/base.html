@@ -24,11 +24,19 @@
 <nav class="navbar navbar-expand-lg mb-4">
   <div class="container">
     <a class="navbar-brand" href="{{ url_for('dashboard') }}">✈️ KAL Staff Console</a>
-    {% if session.get('logged_in') %}
-    <div class="ms-auto">
-      <a href="{{ url_for('logout') }}" class="btn btn-outline-light btn-sm">Logout</a>
+    <div class="d-flex align-items-center gap-2">
+      {% if session.get('logged_in') %}
+        <a href="{{ url_for('dashboard') }}" class="btn btn-outline-light btn-sm">Flight Plans</a>
+      {% endif %}
+      {% if session.get('apps_logged_in') %}
+        <a href="{{ url_for('applications') }}" class="btn btn-outline-light btn-sm">Applications</a>
+      {% endif %}
+      {% if session.get('logged_in') %}
+        <a href="{{ url_for('logout') }}" class="btn btn-outline-light btn-sm">Logout</a>
+      {% elif session.get('apps_logged_in') %}
+        <a href="{{ url_for('apps_logout') }}" class="btn btn-outline-light btn-sm">Logout</a>
+      {% endif %}
     </div>
-    {% endif %}
   </div>
 </nav>
 

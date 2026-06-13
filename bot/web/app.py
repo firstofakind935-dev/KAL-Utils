@@ -30,12 +30,21 @@ def create_app():
     app.secret_key = os.getenv("WEB_SECRET_KEY", "kal-dev-secret")
 
     CONSOLE_PASSWORD = os.getenv("WEB_CONSOLE_PASSWORD", "admin")
+    APPS_PASSWORD = os.getenv("APPS_CONSOLE_PASSWORD", "apps")
 
     def login_required(f):
         @wraps(f)
         def decorated(*args, **kwargs):
             if not session.get("logged_in"):
                 return redirect(url_for("login"))
+            return f(*args, **kwargs)
+        return decorated
+
+    def apps_login_required(f):
+        @wraps(f)
+        def decorated(*args, **kwargs):
+            if not session.get("apps_logged_in"):
+                return redirect(url_for("apps_login"))
             return f(*args, **kwargs)
         return decorated
 
@@ -244,5 +253,175 @@ def create_app():
 
         flash(f"Plan #{plan_id} has been {new_status}.", "success")
         return redirect(url_for("plan_detail", plan_id=plan_id))
+
+    # ════════════════════════════════════════════════════════════════════════
+    # Applications section (separate password)
+    # ════════════════════════════════════════════════════════════════════════
+
+    def row_to_application(row):
+        d = dict(row)
+        try:
+            d["answers"] = json.loads(d.get("answers") or "[]")
+        except Exception:
+            d["answers"] = []
+        return d
+
+    @app.route("/applications/login", methods=["GET", "POST"])
+    def apps_login():
+        if request.method == "POST":
+            if request.form.get("password") == APPS_PASSWORD:
+                session["apps_logged_in"] = True
+                return redirect(url_for("applications"))
+            flash("Invalid password.", "danger")
+        return render_template("apps_login.html")
+
+    @app.route("/applications/logout")
+    def apps_logout():
+        session.pop("apps_logged_in", None)
+        return redirect(url_for("apps_login"))
+
+    @app.route("/applications")
+    @apps_login_required
+    def applications():
+        status = request.args.get("status", "").strip()
+
+        query = "SELECT * FROM applications WHERE 1=1"
+        params = []
+        if status:
+            query += " AND status = ?"
+            params.append(status)
+        query += " ORDER BY id DESC"
+
+        conn = get_db()
+        try:
+            rows = conn.execute(query, params).fetchall()
+        finally:
+            conn.close()
+
+        apps = [row_to_application(r) for r in rows]
+        return render_template("applications.html", apps=apps, filter_status=status)
+
+    @app.route("/applications/<int:app_id>")
+    @apps_login_required
+    def application_detail(app_id):
+        conn = get_db()
+        try:
+            row = conn.execute(
+                "SELECT * FROM applications WHERE id = ?", (app_id,)
+            ).fetchone()
+        finally:
+            conn.close()
+
+        if row is None:
+            flash("Application not found.", "warning")
+            return redirect(url_for("applications"))
+
+        return render_template("application.html", application=row_to_application(row))
+
+    @app.route("/applications/<int:app_id>/review", methods=["POST"])
+    @apps_login_required
+    def application_review(app_id):
+        action = request.form.get("action", "").lower()
+        notes = request.form.get("notes", "").strip()
+
+        if action not in ("approve", "reject"):
+            flash("Invalid action.", "danger")
+            return redirect(url_for("application_detail", app_id=app_id))
+
+        new_status = "approved" if action == "approve" else "rejected"
+
+        conn = get_db()
+        try:
+            row = conn.execute(
+                "SELECT * FROM applications WHERE id = ?", (app_id,)
+            ).fetchone()
+            if row is None:
+                flash("Application not found.", "warning")
+                return redirect(url_for("applications"))
+
+            application = row_to_application(row)
+
+            conn.execute(
+                """UPDATE applications
+                   SET status = ?, reviewed_by = 'Staff (Web Console)',
+                       reviewed_at = datetime('now'), review_notes = ?
+                   WHERE id = ?""",
+                (new_status, notes or None, app_id),
+            )
+            conn.commit()
+
+            cfg_row = conn.execute(
+                "SELECT notification_channel_id FROM applications_config WHERE guild_id = ?",
+                (application.get("guild_id"),),
+            ).fetchone()
+            channel_id = cfg_row["notification_channel_id"] if cfg_row else None
+        finally:
+            conn.close()
+
+        if _bot:
+            colour = 0x2ECC71 if new_status == "approved" else 0xE74C3C
+            action_word = "Approved" if new_status == "approved" else "Rejected"
+            user_id = application.get("user_id")
+
+            async def send_notifications():
+                embed = discord.Embed(
+                    title=f"📋 Application #{app_id} {action_word}",
+                    colour=colour,
+                )
+                embed.add_field(
+                    name="Applicant",
+                    value=application.get("user_name", "—"),
+                    inline=True,
+                )
+                embed.add_field(name="Status", value=action_word, inline=True)
+                if notes:
+                    embed.add_field(name="Notes", value=notes, inline=False)
+
+                # DM the applicant
+                if user_id:
+                    try:
+                        user = await _bot.fetch_user(int(user_id))
+                        dm_embed = discord.Embed(
+                            title=f"📋 Your Korean Air application was {action_word.lower()}",
+                            description=(
+                                f"Application `#{app_id}` has been **{action_word.lower()}**."
+                            ),
+                            colour=colour,
+                        )
+                        if notes:
+                            dm_embed.add_field(name="Notes", value=notes, inline=False)
+                        await user.send(embed=dm_embed)
+                    except Exception:
+                        pass
+
+                # Post to the staff channel
+                if channel_id:
+                    channel = _bot.get_channel(int(channel_id))
+                    if channel:
+                        try:
+                            await channel.send(embed=embed)
+                        except Exception:
+                            pass
+
+            try:
+                asyncio.run_coroutine_threadsafe(send_notifications(), _bot.loop)
+            except Exception:
+                pass
+
+        flash(f"Application #{app_id} has been {new_status}.", "success")
+        return redirect(url_for("application_detail", app_id=app_id))
+
+    @app.route("/applications/<int:app_id>/delete", methods=["POST"])
+    @apps_login_required
+    def application_delete(app_id):
+        conn = get_db()
+        try:
+            conn.execute("DELETE FROM applications WHERE id = ?", (app_id,))
+            conn.commit()
+        finally:
+            conn.close()
+
+        flash(f"Application #{app_id} has been permanently deleted.", "success")
+        return redirect(url_for("applications"))
 
     return app
