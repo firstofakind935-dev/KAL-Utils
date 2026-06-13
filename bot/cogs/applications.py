@@ -185,19 +185,32 @@ class Applications(commands.Cog):
 
         answers = []
         for i, (dm_text, plain_text) in enumerate(QUESTIONS, start=1):
-            await user.send(f"**Question {i}/{len(QUESTIONS)}**\n{dm_text}")
+            q_embed = discord.Embed(
+                title=f"Question {i} of {len(QUESTIONS)}",
+                description=dm_text,
+                color=KAL_BLUE,
+            )
+            q_embed.set_footer(text="Type your answer below • Type 'cancel' to abort")
+            await user.send(embed=q_embed)
             try:
                 reply = await self.bot.wait_for("message", check=check, timeout=ANSWER_TIMEOUT)
             except asyncio.TimeoutError:
-                await user.send(
-                    "⏰ You took too long to answer, so the application was cancelled. "
-                    "Run `/apply` in the server to start over."
+                timeout_embed = discord.Embed(
+                    title="⏰ Application Timed Out",
+                    description="You took too long to answer. Run `/apply` in the server to start over.",
+                    color=0xE74C3C,
                 )
+                await user.send(embed=timeout_embed)
                 return
 
             content = reply.content.strip()
             if content.lower() == "cancel":
-                await user.send("❌ Application cancelled. Run `/apply` in the server to start over.")
+                cancel_embed = discord.Embed(
+                    title="❌ Application Cancelled",
+                    description="Run `/apply` in the server to start over.",
+                    color=0xE74C3C,
+                )
+                await user.send(embed=cancel_embed)
                 return
 
             answers.append({"question": plain_text, "answer": content[:1000]})
@@ -238,13 +251,9 @@ class Applications(commands.Cog):
         }
 
         confirm = application_embed(app_row)
-        await user.send(
-            content=(
-                f"✅ Your application (ID `{app_id}`) has been submitted and is pending review. "
-                "You'll get a DM when a decision is made."
-            ),
-            embed=confirm,
-        )
+        confirm.title = f"✅ Application #{app_id} Submitted"
+        confirm.description = "Your application is **pending review**. You'll receive a DM when a decision is made."
+        await user.send(embed=confirm)
 
         if notification_channel_id:
             channel = guild.get_channel(int(notification_channel_id))
