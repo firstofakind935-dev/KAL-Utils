@@ -36,17 +36,23 @@ class KALBot(commands.Bot):
         from db.database import init_db
         await init_db()
         for cog in COGS:
-            await self.load_extension(cog)
-            print(f"  Loaded: {cog}")
-        await self.tree.sync()
-        print("  Synced slash commands globally")
+            try:
+                await self.load_extension(cog)
+                print(f"  [OK] Loaded: {cog}")
+            except Exception as e:
+                print(f"  [ERROR] Failed to load {cog}: {e}")
+        synced = await self.tree.sync()
+        print(f"  Synced {len(synced)} slash commands globally")
 
     async def on_ready(self):
         print(f"\nLogged in as {self.user} (ID: {self.user.id})")
         print(f"Serving {len(self.guilds)} guild(s)")
         for guild in self.guilds:
-            await self.tree.sync(guild=guild)
-            print(f"  Synced slash commands to {guild.name}")
+            try:
+                synced = await self.tree.sync(guild=discord.Object(id=guild.id))
+                print(f"  Synced {len(synced)} commands to: {guild.name}")
+            except Exception as e:
+                print(f"  [ERROR] Guild sync failed for {guild.name}: {e}")
         print()
 
     async def on_command_error(self, ctx: commands.Context, error):
