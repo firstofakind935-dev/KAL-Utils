@@ -39,11 +39,15 @@ class KALBot(commands.Bot):
             await self.load_extension(cog)
             print(f"  Loaded: {cog}")
         await self.tree.sync()
-        print("  Synced slash commands")
+        print("  Synced slash commands globally")
 
     async def on_ready(self):
         print(f"\nLogged in as {self.user} (ID: {self.user.id})")
-        print(f"Serving {len(self.guilds)} guild(s)\n")
+        print(f"Serving {len(self.guilds)} guild(s)")
+        for guild in self.guilds:
+            await self.tree.sync(guild=guild)
+            print(f"  Synced slash commands to {guild.name}")
+        print()
 
     async def on_command_error(self, ctx: commands.Context, error):
         if isinstance(error, commands.MissingPermissions):
@@ -78,16 +82,15 @@ async def ping(ctx: commands.Context):
     await ctx.send(f"Pong! Latency: **{round(bot.latency * 1000)}ms**")
 
 
-@bot.command(name="sync")
+@bot.hybrid_command(name="sync", description="[Admin] Sync slash commands to this server")
 @commands.has_permissions(administrator=True)
+@app_commands.default_permissions(administrator=True)
 async def sync(ctx: commands.Context):
     """Clear guild command overrides (fixes duplicates) and re-sync globally."""
-    # Wipe guild-specific overrides that cause double commands
     bot.tree.clear_commands(guild=ctx.guild)
     await bot.tree.sync(guild=ctx.guild)
-    # Push fresh global list
     synced = await bot.tree.sync()
-    await ctx.send(f"Cleared guild overrides and synced {len(synced)} commands globally!")
+    await ctx.send(f"Cleared guild overrides and synced {len(synced)} commands globally!", ephemeral=True)
 
 
 def _start_web(bot_instance):
