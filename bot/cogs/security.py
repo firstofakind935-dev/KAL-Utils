@@ -329,7 +329,113 @@ class Security(commands.Cog):
         )
 
     @commands.hybrid_command(
-        name="closeincident",
+        name="testsecurity",
+        description="[Admin] Simulate a security incident to test the alert system",
+    )
+    @commands.has_permissions(administrator=True)
+    @app_commands.default_permissions(administrator=True)
+    async def testsecurity(self, ctx: commands.Context):
+        """Fire a fake incident — creates the channel and pings roles without banning anyone."""
+        await ctx.send("🔧 Running security system test…", ephemeral=True)
+
+        fake_threats = [
+            ("spam", "TEST — Message spam: 5+ messages in 5s"),
+            ("mass_mention", "TEST — @everyone used"),
+            ("ip_logger", "TEST — IP logger link: grabify.link/test123"),
+        ]
+
+        cfg = await self._get_config(ctx.guild.id)
+
+        embed = discord.Embed(
+            title="🚨 Security Incident Report — TEST",
+            description="This is a **test** triggered by staff. No action has been taken.",
+            colour=0xF39C12,
+            timestamp=datetime.now(timezone.utc),
+        )
+        embed.add_field(
+            name="Account",
+            value=f"{ctx.author.mention} — `{ctx.author}` (`{ctx.author.id}`)",
+            inline=False,
+        )
+        embed.add_field(name="Account Type", value="👤 User (test)", inline=True)
+        embed.add_field(name="Action Taken", value="⚠️ None — this is a test", inline=True)
+        embed.add_field(
+            name="Simulated Threats",
+            value="\n".join(f"• {t[1]}" for t in fake_threats),
+            inline=False,
+        )
+        embed.add_field(
+            name="⚠️ IP Leak Warning (simulated)",
+            value=(
+                "IP logger links were sent in this server. "
+                "Any member who **clicked** those links may have had their IP address recorded. "
+                "Advise all members to **avoid clicking** any links sent by this account "
+                "and to consider using a VPN."
+            ),
+            inline=False,
+        )
+        embed.add_field(
+            name="Next Steps",
+            value=(
+                "• Review the incident details above\n"
+                "• Check if any members clicked suspicious links\n"
+                "• Use `/closeincident` when resolved to delete this channel"
+            ),
+            inline=False,
+        )
+        embed.set_footer(text=f"TEST | Guild: {ctx.guild.name}")
+
+        overwrites = {
+            ctx.guild.default_role: discord.PermissionOverwrite(view_channel=False),
+            ctx.guild.me: discord.PermissionOverwrite(
+                view_channel=True,
+                send_messages=True,
+                manage_messages=True,
+                embed_links=True,
+                read_message_history=True,
+                manage_channels=True,
+            ),
+        }
+
+        alert_roles = []
+        for role_id in cfg["role_ids"]:
+            role = ctx.guild.get_role(int(role_id))
+            if role:
+                alert_roles.append(role)
+                overwrites[role] = discord.PermissionOverwrite(
+                    view_channel=True,
+                    send_messages=True,
+                    read_message_history=True,
+                )
+
+        category = None
+        if cfg["category_id"]:
+            category = ctx.guild.get_channel(int(cfg["category_id"]))
+
+        ts = datetime.now(timezone.utc).strftime("%m%d-%H%M")
+        try:
+            incident_channel = await ctx.guild.create_text_channel(
+                name=f"security-incident-{ts}",
+                overwrites=overwrites,
+                category=category,
+                topic="Security system test — no real threat.",
+                reason="Security system test",
+            )
+        except (discord.Forbidden, discord.HTTPException) as e:
+            await ctx.send(f"❌ Could not create incident channel: `{e}`", ephemeral=True)
+            return
+
+        mentions = " ".join(r.mention for r in alert_roles) if alert_roles else ""
+        await incident_channel.send(
+            content=f"{mentions}\n🔧 **Security system test** — see the simulated report below.".strip(),
+            embed=embed,
+        )
+        await ctx.send(
+            f"✅ Test complete — incident channel created: {incident_channel.mention}",
+            ephemeral=True,
+        )
+
+    @commands.hybrid_command(
         description="[Admin] Mark incident as resolved and delete this channel",
     )
     @commands.has_permissions(administrator=True)
