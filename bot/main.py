@@ -23,6 +23,7 @@ COGS = [
     "cogs.youtube",
     "cogs.flightplan",
     "cogs.applications",
+    "cogs.security",
 ]
 
 intents = discord.Intents.default()
