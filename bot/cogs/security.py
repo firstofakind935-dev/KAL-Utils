@@ -334,9 +334,13 @@ class Security(commands.Cog):
     )
     @commands.has_permissions(administrator=True)
     @app_commands.default_permissions(administrator=True)
-    async def testsecurity(self, ctx: commands.Context):
-        """Fire a fake incident — creates the channel and pings roles without banning anyone."""
-        await ctx.send("🔧 Running security system test…", ephemeral=True)
+    @app_commands.describe(silent="If True, creates the channel and report without pinging roles")
+    async def testsecurity(self, ctx: commands.Context, silent: bool = False):
+        """Fire a fake incident — creates the channel and report without banning anyone."""
+        await ctx.send(
+            f"🔧 Running security system test {'(silent)' if silent else ''}…",
+            ephemeral=True,
+        )
 
         fake_threats = [
             ("spam", "TEST — Message spam: 5+ messages in 5s"),
@@ -425,7 +429,7 @@ class Security(commands.Cog):
             await ctx.send(f"❌ Could not create incident channel: `{e}`", ephemeral=True)
             return
 
-        mentions = " ".join(r.mention for r in alert_roles) if alert_roles else ""
+        mentions = " ".join(r.mention for r in alert_roles) if (alert_roles and not silent) else ""
         await incident_channel.send(
             content=f"{mentions}\n🔧 **Security system test** — see the simulated report below.".strip(),
             embed=embed,
