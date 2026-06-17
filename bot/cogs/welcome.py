@@ -30,15 +30,20 @@ class Welcome(commands.Cog):
                 CREATE TABLE IF NOT EXISTS welcome_config (
                     guild_id INTEGER PRIMARY KEY,
                     welcome_channel_id INTEGER,
-                    helpdesk_channel_id INTEGER
+                    helpdesk_channel_id INTEGER,
+                    verify_channel_id INTEGER
                 )
             """)
+            try:
+                await db.execute("ALTER TABLE welcome_config ADD COLUMN verify_channel_id INTEGER")
+            except Exception:
+                pass
             await db.commit()
 
     async def get_config(self, guild_id: int):
         async with aiosqlite.connect(DB_PATH) as db:
             async with db.execute(
-                "SELECT welcome_channel_id, helpdesk_channel_id FROM welcome_config WHERE guild_id = ?",
+                "SELECT welcome_channel_id, helpdesk_channel_id, verify_channel_id FROM welcome_config WHERE guild_id = ?",
                 (guild_id,)
             ) as cur:
                 return await cur.fetchone()
@@ -54,16 +59,24 @@ class Welcome(commands.Cog):
         if not channel:
             return
 
+        welcome_channel_id = config[0]
+        helpdesk_channel_id = config[1]
+        verify_channel_id = config[2] if len(config) > 2 else None
+
         helpdesk = member.guild.get_channel(helpdesk_channel_id) if helpdesk_channel_id else None
         helpdesk_mention = helpdesk.mention if helpdesk else "#helpdesk"
+
+        verify = member.guild.get_channel(verify_channel_id) if verify_channel_id else None
+        verify_mention = verify.mention if verify else "#verify-here"
+
         member_number = ordinal(member.guild.member_count)
 
         embed = discord.Embed(
-            title="Korean Air Virtual Airlines • PTFS ATC24 ✈️",
+            title="🇰🇷 Welcome!",
             description=(
-                f"환영합니다 **Welcome Aboard,**\n\n"
-                f"We're pleased to have you here.\n\n"
-                f"If you require any assistance, feel free to reach out at any time at "
+                f"➡️ We're pleased to have you here. Kindly proceed to {verify_mention} "
+                f"to complete your verification and gain full access.\n\n"
+                f"➡️ If you require any assistance, feel free to reach out at any time at "
                 f"{helpdesk_mention}."
             ),
             color=discord.Color(0x00A4E4),
@@ -71,8 +84,8 @@ class Welcome(commands.Cog):
         embed.set_image(url=BANNER_URL)
 
         await channel.send(
-            f"Welcome to **Korean Air PTFS 대한항공** {member.mention}, "
-            f"you are our **{member_number}** member!",
+            f"🇰🇷 Hwan-yeonghabnida to **Korean Air PTFS** {member.mention}! "
+            f"you are our **{member_number}** member",
             embed=embed,
         )
 
@@ -103,6 +116,20 @@ class Welcome(commands.Cog):
             """, (ctx.guild.id, channel.id, channel.id))
             await db.commit()
         await ctx.send(f"Helpdesk channel set to {channel.mention}.", ephemeral=True)
+
+    @commands.hybrid_command(name="setverify", description="Set the verification channel linked in welcome messages")
+    @app_commands.describe(channel="The verification channel")
+    @commands.has_permissions(administrator=True)
+    @app_commands.default_permissions(administrator=True)
+    async def setverify(self, ctx: commands.Context, channel: discord.TextChannel):
+        async with aiosqlite.connect(DB_PATH) as db:
+            await db.execute("""
+                INSERT INTO welcome_config (guild_id, verify_channel_id)
+                VALUES (?, ?)
+                ON CONFLICT(guild_id) DO UPDATE SET verify_channel_id = ?
+            """, (ctx.guild.id, channel.id, channel.id))
+            await db.commit()
+        await ctx.send(f"Verify channel set to {channel.mention}.", ephemeral=True)
 
     @commands.hybrid_command(name="testwelcome", description="Test the welcome message")
     @commands.has_permissions(administrator=True)
