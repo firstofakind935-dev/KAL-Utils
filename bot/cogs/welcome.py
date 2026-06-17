@@ -54,14 +54,13 @@ class Welcome(commands.Cog):
         if not config or not config[0]:
             return
 
-        welcome_channel_id, helpdesk_channel_id = config
-        channel = member.guild.get_channel(welcome_channel_id)
-        if not channel:
-            return
-
         welcome_channel_id = config[0]
         helpdesk_channel_id = config[1]
         verify_channel_id = config[2] if len(config) > 2 else None
+
+        channel = member.guild.get_channel(welcome_channel_id)
+        if not channel:
+            return
 
         helpdesk = member.guild.get_channel(helpdesk_channel_id) if helpdesk_channel_id else None
         helpdesk_mention = helpdesk.mention if helpdesk else "#helpdesk"
