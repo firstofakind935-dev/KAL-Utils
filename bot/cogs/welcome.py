@@ -8,7 +8,7 @@ from db.database import DB_PATH
 
 BANNER_URL = os.getenv(
     "BANNER_URL",
-    "https://i.postimg.cc/fL2Q5LNV/banner1.webp"
+    "https://i.imgur.com/iNl6RZG.png"
 )
 
 
