@@ -71,11 +71,11 @@ class Welcome(commands.Cog):
         member_number = ordinal(member.guild.member_count)
 
         embed = discord.Embed(
-            title="🇰🇷 Welcome!",
+            title="<:Flag:1504848692195365065> Welcome!",
             description=(
-                f"➡️ We're pleased to have you here. Kindly proceed to {verify_mention} "
+                f"<:KE_Arrow:1510682534189731910> We're pleased to have you here. Kindly proceed to {verify_mention} "
                 f"to complete your verification and gain full access.\n\n"
-                f"➡️ If you require any assistance, feel free to reach out at any time at "
+                f"<:KE_Arrow:1510682534189731910> If you require any assistance, feel free to reach out at any time at "
                 f"{helpdesk_mention}."
             ),
             color=discord.Color(0x00A4E4),
@@ -83,7 +83,7 @@ class Welcome(commands.Cog):
         embed.set_image(url=BANNER_URL)
 
         await channel.send(
-            f"🇰🇷 Hwan-yeonghabnida to **Korean Air PTFS** {member.mention}! "
+            f"<:Flag:1504848692195365065> Hwan-yeonghabnida to **Korean Air PTFS** {member.mention}! "
             f"you are our **{member_number}** member",
             embed=embed,
         )
