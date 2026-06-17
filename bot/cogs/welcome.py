@@ -136,8 +136,12 @@ class Welcome(commands.Cog):
     @app_commands.default_permissions(administrator=True)
     async def testwelcome(self, ctx: commands.Context):
         """Send a test welcome message for the current user."""
-        await self.on_member_join(ctx.author)
-        await ctx.send("Test welcome sent!", ephemeral=True)
+        await ctx.defer(ephemeral=True)
+        try:
+            await self.on_member_join(ctx.author)
+            await ctx.send("Test welcome sent!", ephemeral=True)
+        except Exception as e:
+            await ctx.send(f"Error: `{e}`", ephemeral=True)
 
 
 async def setup(bot: commands.Bot):
