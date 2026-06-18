@@ -43,9 +43,16 @@ async def create_ticket_channel(guild: discord.Guild, user: discord.Member, sect
     if support_role:
         overwrites[support_role] = discord.PermissionOverwrite(view_channel=True, send_messages=True)
 
-    safe_section = section.lower().replace(" ", "-")
+    async with aiosqlite.connect(DB_PATH) as db:
+        cur = await db.execute(
+            "INSERT INTO tickets (guild_id, user_id, channel_id, section) VALUES (?, ?, ?, ?)",
+            (guild.id, user.id, 0, section),
+        )
+        ticket_id = cur.lastrowid
+        await db.commit()
+
     channel = await guild.create_text_channel(
-        f"{safe_section}-{user.name}",
+        f"ticket-{ticket_id}",
         overwrites=overwrites,
         category=category,
         topic=f"[{section}] Support ticket for {user} ({user.id})",
@@ -53,8 +60,8 @@ async def create_ticket_channel(guild: discord.Guild, user: discord.Member, sect
 
     async with aiosqlite.connect(DB_PATH) as db:
         await db.execute(
-            "INSERT INTO tickets (guild_id, user_id, channel_id, section) VALUES (?, ?, ?, ?)",
-            (guild.id, user.id, channel.id, section),
+            "UPDATE tickets SET channel_id = ? WHERE id = ?",
+            (channel.id, ticket_id),
         )
         await db.commit()
 
