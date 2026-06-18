@@ -52,7 +52,7 @@ async def create_ticket_channel(guild: discord.Guild, user: discord.Member, sect
         await db.commit()
 
     channel = await guild.create_text_channel(
-        f"ticket-{ticket_id}",
+        f"ticket-{ticket_id:04d}",
         overwrites=overwrites,
         category=category,
         topic=f"[{section}] Support ticket for {user} ({user.id})",
