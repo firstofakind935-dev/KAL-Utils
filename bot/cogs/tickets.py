@@ -183,6 +183,9 @@ class Tickets(commands.Cog):
                     closed     INTEGER NOT NULL DEFAULT 0
                 )
             """)
+            await db.execute(
+                "INSERT OR IGNORE INTO sqlite_sequence (name, seq) VALUES ('tickets', 57)"
+            )
             await db.commit()
 
         self.bot.add_view(TicketPanel())
