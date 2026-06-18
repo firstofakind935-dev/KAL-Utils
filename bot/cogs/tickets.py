@@ -200,6 +200,7 @@ class Tickets(commands.Cog):
         section1: str = "General Support",
         section2: str = "Partnerships",
     ):
+        await ctx.defer(ephemeral=True)
         async with aiosqlite.connect(DB_PATH) as db:
             await db.execute("""
                 INSERT INTO ticket_config (guild_id, support_role_id, category_id, section1_label, section2_label)
