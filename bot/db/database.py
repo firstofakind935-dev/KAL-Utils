@@ -1,7 +1,13 @@
 import os
 import aiosqlite
 
-DB_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "bot.db")
+# Allow DB_PATH to be overridden via environment variable so the database
+# can be stored on a persistent volume (Railway, justrunmy.app, etc.).
+# Set DB_PATH=/data/bot.db in your hosting env and mount a volume at /data.
+DB_PATH = os.getenv(
+    "DB_PATH",
+    os.path.join(os.path.dirname(os.path.abspath(__file__)), "bot.db"),
+)
 
 
 async def init_db():
