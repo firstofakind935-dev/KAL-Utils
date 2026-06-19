@@ -48,13 +48,27 @@ class KALBot(commands.Bot):
     async def on_ready(self):
         print(f"\nLogged in as {self.user} (ID: {self.user.id})")
         print(f"Serving {len(self.guilds)} guild(s)")
+
+        if getattr(self, "_synced", False):
+            return
+        self._synced = True
+
+        # Remove any guild-specific command overrides — these cause duplicates
+        # when Discord also has the global commands registered.
         for guild in self.guilds:
             try:
-                self.tree.copy_global_to(guild=guild)
-                synced = await self.tree.sync(guild=guild)
-                print(f"  Synced {len(synced)} commands to: {guild.name}")
+                self.tree.clear_commands(guild=guild)
+                await self.tree.sync(guild=guild)
+                print(f"  Cleared guild overrides: {guild.name}")
             except Exception as e:
-                print(f"  [ERROR] Guild sync failed for {guild.name}: {e}")
+                print(f"  [WARN] Could not clear guild overrides for {guild.name}: {e}")
+
+        # Sync commands globally (single source of truth)
+        try:
+            synced = await self.tree.sync()
+            print(f"  Synced {len(synced)} commands globally")
+        except Exception as e:
+            print(f"  [ERROR] Global sync failed: {e}")
         print()
 
     async def on_command_error(self, ctx: commands.Context, error):
@@ -90,14 +104,20 @@ async def ping(ctx: commands.Context):
     await ctx.send(f"Pong! Latency: **{round(bot.latency * 1000)}ms**")
 
 
-@bot.hybrid_command(name="sync", description="[Admin] Sync slash commands to this server")
+@bot.hybrid_command(name="sync", description="[Admin] Clear duplicate commands and re-sync globally")
 @commands.has_permissions(administrator=True)
 @app_commands.default_permissions(administrator=True)
 async def sync(ctx: commands.Context):
-    """Clear guild command overrides (fixes duplicates) and re-sync globally."""
-    bot.tree.copy_global_to(guild=ctx.guild)
-    synced = await bot.tree.sync(guild=ctx.guild)
-    await ctx.send(f"Synced {len(synced)} commands to this server!", ephemeral=True)
+    # Remove guild-specific overrides for every guild the bot is in
+    for guild in bot.guilds:
+        try:
+            bot.tree.clear_commands(guild=guild)
+            await bot.tree.sync(guild=guild)
+        except Exception:
+            pass
+    # Re-sync globally as the single source of truth
+    synced = await bot.tree.sync()
+    await ctx.send(f"Cleared guild overrides and synced {len(synced)} commands globally.", ephemeral=True)
 
 
 def _start_web(bot_instance):
