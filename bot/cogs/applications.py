@@ -152,6 +152,46 @@ class ButtonQuestionsModal(discord.ui.Modal, title="Add Application Button"):
 
 
 # ---------------------------------------------------------------------------
+# Edit questions modal (pre-filled with existing answers)
+# ---------------------------------------------------------------------------
+
+class EditQuestionsModal(discord.ui.Modal, title="Edit Button Questions"):
+    def __init__(self, button_id: int, existing: list):
+        super().__init__()
+        self.button_id = button_id
+
+        qs = (existing + ["", "", "", "", ""])[:5]
+        self.q1 = discord.ui.TextInput(label="Question 1", required=True,  max_length=300, default=qs[0])
+        self.q2 = discord.ui.TextInput(label="Question 2", required=False, max_length=300, default=qs[1])
+        self.q3 = discord.ui.TextInput(label="Question 3", required=False, max_length=300, default=qs[2])
+        self.q4 = discord.ui.TextInput(label="Question 4", required=False, max_length=300, default=qs[3])
+        self.q5 = discord.ui.TextInput(label="Question 5", required=False, max_length=300, default=qs[4])
+        for field in (self.q1, self.q2, self.q3, self.q4, self.q5):
+            self.add_item(field)
+
+    async def on_submit(self, interaction: discord.Interaction):
+        questions = [
+            q.value.strip()
+            for q in (self.q1, self.q2, self.q3, self.q4, self.q5)
+            if q.value.strip()
+        ]
+        async with aiosqlite.connect(DB_PATH) as db:
+            await db.execute(
+                "DELETE FROM application_questions WHERE button_id = ?", (self.button_id,)
+            )
+            for i, text in enumerate(questions, start=1):
+                await db.execute(
+                    "INSERT INTO application_questions (button_id, question_order, question_text) VALUES (?, ?, ?)",
+                    (self.button_id, i, text),
+                )
+            await db.commit()
+
+        await interaction.response.send_message(
+            f"Updated **{len(questions)}** question(s) for button #{self.button_id}.", ephemeral=True
+        )
+
+
+# ---------------------------------------------------------------------------
 # Application panel view (one per panel, contains all its buttons)
 # ---------------------------------------------------------------------------
 
@@ -757,18 +797,139 @@ class Applications(commands.Cog):
         async with aiosqlite.connect(DB_PATH) as db:
             for panel_id, title, notif_id in panels:
                 async with db.execute(
-                    "SELECT label FROM application_buttons WHERE panel_id = ? ORDER BY btn_order",
+                    "SELECT id, label FROM application_buttons WHERE panel_id = ? ORDER BY btn_order",
                     (panel_id,),
                 ) as cur:
                     btns = await cur.fetchall()
                 notif = f"<#{notif_id}>" if notif_id else "not set"
-                btn_list = " · ".join(f'"{r[0]}"' for r in btns) or "none — use `/addbutton {panel_id}`"
+                if btns:
+                    btn_list = "\n".join(f"  `#{r[0]}` — {r[1]}" for r in btns)
+                else:
+                    btn_list = f"none — use `/addbutton {panel_id}`"
                 embed.add_field(
-                    name=f"#{panel_id} — {title}",
-                    value=f"Notifications: {notif}\nButtons: {btn_list}",
+                    name=f"Panel #{panel_id} — {title}",
+                    value=f"Notifications: {notif}\nButtons:\n{btn_list}",
                     inline=False,
                 )
         await ctx.send(embed=embed, ephemeral=True)
+
+    @commands.hybrid_command(
+        name="editbutton",
+        description="[Admin] Edit a button's label or emoji",
+    )
+    @app_commands.describe(
+        button_id="Button ID from /listpanels",
+        label="New button label",
+        emoji="New emoji (leave blank to keep existing)",
+    )
+    @commands.has_permissions(administrator=True)
+    @app_commands.default_permissions(administrator=True)
+    @commands.guild_only()
+    async def editbutton(self, ctx: commands.Context, button_id: int, label: str, emoji: str = None):
+        async with aiosqlite.connect(DB_PATH) as db:
+            async with db.execute(
+                """SELECT ab.id FROM application_buttons ab
+                   JOIN application_panels ap ON ap.id = ab.panel_id
+                   WHERE ab.id = ? AND ap.guild_id = ?""",
+                (button_id, ctx.guild.id),
+            ) as cur:
+                row = await cur.fetchone()
+
+        if not row:
+            await ctx.send(f"Button #{button_id} not found in this server.", ephemeral=True)
+            return
+
+        async with aiosqlite.connect(DB_PATH) as db:
+            if emoji:
+                await db.execute(
+                    "UPDATE application_buttons SET label = ?, emoji = ? WHERE id = ?",
+                    (label, emoji, button_id),
+                )
+            else:
+                await db.execute(
+                    "UPDATE application_buttons SET label = ? WHERE id = ?",
+                    (label, button_id),
+                )
+            # fetch panel_id so we can tell the user which panel to re-post
+            async with db.execute(
+                "SELECT panel_id FROM application_buttons WHERE id = ?", (button_id,)
+            ) as cur:
+                (panel_id,) = await cur.fetchone()
+            await db.commit()
+
+        await ctx.send(
+            f"Button #{button_id} updated to **\"{label}\"**.\n"
+            f"Run `/postpanel {panel_id}` to re-post the embed with the new label.",
+            ephemeral=True,
+        )
+
+    @commands.hybrid_command(
+        name="editbuttonquestions",
+        description="[Admin] Edit the interview questions for a button",
+    )
+    @app_commands.describe(button_id="Button ID from /listpanels")
+    @commands.has_permissions(administrator=True)
+    @app_commands.default_permissions(administrator=True)
+    @commands.guild_only()
+    async def editbuttonquestions(self, ctx: commands.Context, button_id: int):
+        if ctx.interaction is None:
+            await ctx.send("Please use the slash command `/editbuttonquestions`.", ephemeral=True)
+            return
+
+        async with aiosqlite.connect(DB_PATH) as db:
+            async with db.execute(
+                """SELECT ab.id FROM application_buttons ab
+                   JOIN application_panels ap ON ap.id = ab.panel_id
+                   WHERE ab.id = ? AND ap.guild_id = ?""",
+                (button_id, ctx.guild.id),
+            ) as cur:
+                row = await cur.fetchone()
+
+            if not row:
+                await ctx.send(f"Button #{button_id} not found in this server.", ephemeral=True)
+                return
+
+            async with db.execute(
+                "SELECT question_text FROM application_questions WHERE button_id = ? ORDER BY question_order",
+                (button_id,),
+            ) as cur:
+                existing = [r[0] for r in await cur.fetchall()]
+
+        await ctx.interaction.response.send_modal(EditQuestionsModal(button_id, existing))
+
+    @commands.hybrid_command(
+        name="removebutton",
+        description="[Admin] Remove a button from a panel",
+    )
+    @app_commands.describe(button_id="Button ID from /listpanels")
+    @commands.has_permissions(administrator=True)
+    @app_commands.default_permissions(administrator=True)
+    @commands.guild_only()
+    async def removebutton(self, ctx: commands.Context, button_id: int):
+        async with aiosqlite.connect(DB_PATH) as db:
+            async with db.execute(
+                """SELECT ab.label, ab.panel_id FROM application_buttons ab
+                   JOIN application_panels ap ON ap.id = ab.panel_id
+                   WHERE ab.id = ? AND ap.guild_id = ?""",
+                (button_id, ctx.guild.id),
+            ) as cur:
+                row = await cur.fetchone()
+
+        if not row:
+            await ctx.send(f"Button #{button_id} not found in this server.", ephemeral=True)
+            return
+
+        btn_label, panel_id = row
+        async with aiosqlite.connect(DB_PATH) as db:
+            await db.execute("DELETE FROM application_questions WHERE button_id = ?", (button_id,))
+            await db.execute("DELETE FROM application_buttons WHERE id = ?", (button_id,))
+            await db.commit()
+
+        await ctx.send(
+            f"Removed button **\"{btn_label}\"** from Panel #{panel_id}.\n"
+            f"Run `/postpanel {panel_id}` to re-post the embed without this button.",
+            ephemeral=True,
+        )
 
     @commands.hybrid_command(
         name="setapplicationchannel",
