@@ -190,8 +190,15 @@ class ApplyButton(discord.ui.Button):
                 (guild.id,),
             ) as cur:
                 rows = await cur.fetchall()
+            async with db.execute(
+                "SELECT title FROM application_panels WHERE guild_id = ?",
+                (guild.id,),
+            ) as cur:
+                panel_row = await cur.fetchone()
 
         questions = [r[0] for r in rows]
+        panel_title = panel_row[0] if panel_row else "Application"
+
         if not questions:
             return await interaction.response.send_message(
                 "No questions have been set up yet. Ask an admin to run `/setapplicationquestions`.",
@@ -223,7 +230,7 @@ class ApplyButton(discord.ui.Button):
 
         cog._active_interviews.add(user.id)
         try:
-            await cog._run_interview(user, guild, questions)
+            await cog._run_interview(user, guild, questions, panel_title)
         finally:
             cog._active_interviews.discard(user.id)
 
@@ -376,11 +383,16 @@ class Applications(commands.Cog):
                     submitted_at  TEXT    NOT NULL,
                     status        TEXT    NOT NULL DEFAULT 'pending',
                     answers       TEXT    NOT NULL,
+                    source        TEXT,
                     reviewed_by   TEXT,
                     reviewed_at   TEXT,
                     review_notes  TEXT
                 )
             """)
+            try:
+                await db.execute("ALTER TABLE applications ADD COLUMN source TEXT")
+            except Exception:
+                pass
             await db.execute("""
                 CREATE TABLE IF NOT EXISTS application_panels (
                     guild_id     INTEGER PRIMARY KEY,
@@ -408,7 +420,7 @@ class Applications(commands.Cog):
 
         self.bot.add_view(ApplicationPanelView())
 
-    async def _run_interview(self, user: discord.User, guild: discord.Guild, questions: list):
+    async def _run_interview(self, user: discord.User, guild: discord.Guild, questions: list, source: str = ""):
         def check(m: discord.Message) -> bool:
             return m.author.id == user.id and m.guild is None
 
@@ -490,9 +502,9 @@ class Applications(commands.Cog):
 
         async with aiosqlite.connect(DB_PATH) as db:
             cursor = await db.execute(
-                """INSERT INTO applications (guild_id, user_id, user_name, submitted_at, status, answers)
-                   VALUES (?, ?, ?, ?, 'pending', ?)""",
-                (guild.id, str(user.id), user.display_name, submitted_at, answers_json),
+                """INSERT INTO applications (guild_id, user_id, user_name, submitted_at, status, answers, source)
+                   VALUES (?, ?, ?, ?, 'pending', ?, ?)""",
+                (guild.id, str(user.id), user.display_name, submitted_at, answers_json, source),
             )
             app_id = cursor.lastrowid
             await db.commit()
@@ -527,6 +539,7 @@ class Applications(commands.Cog):
                     "submitted_at": submitted_at,
                     "status": "pending",
                     "answers": answers,
+                    "source": source,
                     "reviewed_by": None,
                     "reviewed_at": None,
                     "review_notes": None,

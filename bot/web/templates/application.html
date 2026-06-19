@@ -42,6 +42,15 @@
 
           <dt class="col-sm-4">Submitted At</dt>
           <dd class="col-sm-8">{{ application.submitted_at or '—' }}</dd>
+
+          <dt class="col-sm-4">Applied Via</dt>
+          <dd class="col-sm-8">
+            {% if application.source %}
+              <span class="badge" style="background:#00A4E4;">{{ application.source }}</span>
+            {% else %}
+              <span class="text-muted">—</span>
+            {% endif %}
+          </dd>
         </dl>
       </div>
     </div>
