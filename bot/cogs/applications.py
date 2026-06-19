@@ -8,12 +8,9 @@ from discord.ext import commands
 
 from db.database import DB_PATH
 
-# ---------------------------------------------------------------------------
-# Constants
-# ---------------------------------------------------------------------------
-
 KAL_BLUE = 0x00A4E4
 QUESTION_COLOR = 0x9DD9E5
+ANSWER_TIMEOUT = 300
 
 STATUS_EMOJI = {
     "pending": "⏳",
@@ -21,40 +18,14 @@ STATUS_EMOJI = {
     "rejected": "❌",
 }
 
-# (dm_text, plain_text) — dm_text may contain Discord markdown, plain_text is
-# what gets stored and shown in embeds / the web console.
-QUESTIONS = [
-    ("What is your roblox username?",
-     "What is your roblox username?"),
-    ("Do you have the ATC24 Role on the ATC24 Server?",
-     "Do you have the ATC24 Role on the ATC24 Server?"),
-    ("Do you promise to only use Korean Air to log flights?",
-     "Do you promise to only use Korean Air to log flights?"),
-    ("Will you log flights __**outside**__ of ATC24?",
-     "Will you log flights outside of ATC24?"),
-    ("How many PTFS Minutes do you have?",
-     "How many PTFS Minutes do you have?"),
-]
-
-ANSWER_TIMEOUT = 300  # seconds the applicant has to answer each question
-
-
-# ---------------------------------------------------------------------------
-# Helper
-# ---------------------------------------------------------------------------
 
 def application_embed(app_row: dict) -> discord.Embed:
-    """Build a discord.Embed for an application from a DB row dict."""
     answers = app_row["answers"]
     if not isinstance(answers, list):
         answers = json.loads(answers)
 
     emoji = STATUS_EMOJI.get(app_row["status"], "❓")
-
-    embed = discord.Embed(
-        title=f"Application #{app_row['id']}",
-        color=KAL_BLUE,
-    )
+    embed = discord.Embed(title=f"Application #{app_row['id']}", color=KAL_BLUE)
     embed.add_field(name="Status", value=f"{emoji} {app_row['status'].capitalize()}", inline=True)
     embed.add_field(name="Applicant", value=app_row["user_name"], inline=True)
     embed.add_field(name="Submitted At", value=app_row["submitted_at"], inline=True)
@@ -78,7 +49,187 @@ def application_embed(app_row: dict) -> discord.Embed:
 
 
 # ---------------------------------------------------------------------------
-# Review UI (posted to staff channel with each new application)
+# Setup modals
+# ---------------------------------------------------------------------------
+
+class PanelSetupModal(discord.ui.Modal, title="Application Panel Setup"):
+    panel_title = discord.ui.TextInput(
+        label="Embed Title",
+        default="✈️ Apply to Korean Air",
+        max_length=256,
+    )
+    panel_description = discord.ui.TextInput(
+        label="Embed Description / Info",
+        style=discord.TextStyle.paragraph,
+        placeholder="Tell applicants what this is for and any requirements...",
+        max_length=2000,
+    )
+    button_label = discord.ui.TextInput(
+        label="Button Label",
+        default="Apply Now",
+        max_length=80,
+    )
+
+    def __init__(self, channel: discord.TextChannel):
+        super().__init__()
+        self.channel = channel
+
+    async def on_submit(self, interaction: discord.Interaction):
+        title = self.panel_title.value.strip()
+        description = self.panel_description.value.strip()
+        btn_label = self.button_label.value.strip()
+
+        async with aiosqlite.connect(DB_PATH) as db:
+            await db.execute(
+                """
+                INSERT INTO application_panels (guild_id, channel_id, title, description, button_label)
+                VALUES (?, ?, ?, ?, ?)
+                ON CONFLICT(guild_id) DO UPDATE SET
+                    channel_id   = excluded.channel_id,
+                    title        = excluded.title,
+                    description  = excluded.description,
+                    button_label = excluded.button_label
+                """,
+                (interaction.guild.id, self.channel.id, title, description, btn_label),
+            )
+            await db.commit()
+
+        embed = discord.Embed(title=title, description=description, color=KAL_BLUE)
+        view = ApplicationPanelView(btn_label)
+        await self.channel.send(embed=embed, view=view)
+
+        await interaction.response.send_message(
+            f"Application panel posted in {self.channel.mention}!", ephemeral=True
+        )
+
+
+class QuestionsModal(discord.ui.Modal, title="Set Application Questions"):
+    q1 = discord.ui.TextInput(label="Question 1", required=True, max_length=300)
+    q2 = discord.ui.TextInput(label="Question 2", required=False, max_length=300, default="")
+    q3 = discord.ui.TextInput(label="Question 3", required=False, max_length=300, default="")
+    q4 = discord.ui.TextInput(label="Question 4", required=False, max_length=300, default="")
+    q5 = discord.ui.TextInput(label="Question 5", required=False, max_length=300, default="")
+
+    def __init__(self, guild_id: int):
+        super().__init__()
+        self.guild_id = guild_id
+
+    async def on_submit(self, interaction: discord.Interaction):
+        questions = [
+            q.value.strip()
+            for q in (self.q1, self.q2, self.q3, self.q4, self.q5)
+            if q.value.strip()
+        ]
+
+        async with aiosqlite.connect(DB_PATH) as db:
+            await db.execute(
+                "DELETE FROM application_questions WHERE guild_id = ?",
+                (self.guild_id,),
+            )
+            for i, text in enumerate(questions, start=1):
+                await db.execute(
+                    "INSERT INTO application_questions (guild_id, question_order, question_text) VALUES (?, ?, ?)",
+                    (self.guild_id, i, text),
+                )
+            await db.commit()
+
+        await interaction.response.send_message(
+            f"Saved **{len(questions)}** question(s).", ephemeral=True
+        )
+
+
+# ---------------------------------------------------------------------------
+# Application panel view (persistent)
+# ---------------------------------------------------------------------------
+
+class ApplicationPanelView(discord.ui.View):
+    def __init__(self, button_label: str = "Apply Now"):
+        super().__init__(timeout=None)
+        self.add_item(ApplyButton(button_label))
+
+
+class ApplyButton(discord.ui.Button):
+    def __init__(self, label: str = "Apply Now"):
+        super().__init__(
+            label=label,
+            custom_id="application:apply",
+            style=discord.ButtonStyle.primary,
+            emoji="✈️",
+        )
+
+    async def callback(self, interaction: discord.Interaction):
+        cog: "Applications" = interaction.client.cogs.get("Applications")
+        if cog is None:
+            return await interaction.response.send_message("Bot error — please contact an admin.", ephemeral=True)
+
+        guild = interaction.guild
+        user = interaction.user
+
+        if user.id in cog._active_interviews:
+            return await interaction.response.send_message(
+                "You already have an interview in progress — check your DMs.", ephemeral=True
+            )
+
+        async with aiosqlite.connect(DB_PATH) as db:
+            async with db.execute(
+                "SELECT id FROM applications WHERE guild_id = ? AND user_id = ? AND status = 'pending'",
+                (guild.id, str(user.id)),
+            ) as cur:
+                pending = await cur.fetchone()
+
+        if pending:
+            return await interaction.response.send_message(
+                f"You already have a pending application (`#{pending[0]}`). "
+                "Please wait for it to be reviewed before applying again.",
+                ephemeral=True,
+            )
+
+        async with aiosqlite.connect(DB_PATH) as db:
+            async with db.execute(
+                "SELECT question_text FROM application_questions WHERE guild_id = ? ORDER BY question_order",
+                (guild.id,),
+            ) as cur:
+                rows = await cur.fetchall()
+
+        questions = [r[0] for r in rows]
+        if not questions:
+            return await interaction.response.send_message(
+                "No questions have been set up yet. Ask an admin to run `/setapplicationquestions`.",
+                ephemeral=True,
+            )
+
+        try:
+            intro = discord.Embed(
+                title="✈️ Korean Air Application",
+                description=(
+                    f"Welcome! I'll ask you **{len(questions)} question(s)**.\n"
+                    f"Reply to each one in this DM. You have "
+                    f"**{ANSWER_TIMEOUT // 60} minutes** per question.\n\n"
+                    "Type `cancel` at any time to abort."
+                ),
+                color=KAL_BLUE,
+            )
+            await user.send(embed=intro)
+        except discord.Forbidden:
+            return await interaction.response.send_message(
+                "I couldn't DM you. Enable **Direct Messages** from server members "
+                "in your privacy settings, then try again.",
+                ephemeral=True,
+            )
+
+        await interaction.response.send_message(
+            "📬 Check your DMs — your application interview has started!", ephemeral=True
+        )
+
+        cog._active_interviews.add(user.id)
+        try:
+            await cog._run_interview(user, guild, questions)
+        finally:
+            cog._active_interviews.discard(user.id)
+
+
+# ---------------------------------------------------------------------------
+# Review UI
 # ---------------------------------------------------------------------------
 
 class RejectReasonModal(discord.ui.Modal, title="Reject Application"):
@@ -90,15 +241,7 @@ class RejectReasonModal(discord.ui.Modal, title="Reject Application"):
         max_length=1000,
     )
 
-    def __init__(
-        self,
-        app_id: int,
-        user_id: str,
-        user_name: str,
-        cog: "Applications",
-        review_view: "ApplicationReviewView",
-        original_message: discord.Message,
-    ):
+    def __init__(self, app_id, user_id, user_name, cog, review_view, original_message):
         super().__init__()
         self.app_id = app_id
         self.user_id = user_id
@@ -157,7 +300,7 @@ class RejectReasonModal(discord.ui.Modal, title="Reject Application"):
 
 
 class ApplicationReviewView(discord.ui.View):
-    def __init__(self, app_id: int, user_id: str, user_name: str, cog: "Applications"):
+    def __init__(self, app_id, user_id, user_name, cog):
         super().__init__(timeout=None)
         self.app_id = app_id
         self.user_id = user_id
@@ -222,10 +365,6 @@ class Applications(commands.Cog):
         self.bot = bot
         self._active_interviews: set[int] = set()
 
-    # -----------------------------------------------------------------------
-    # Setup
-    # -----------------------------------------------------------------------
-
     async def cog_load(self):
         async with aiosqlite.connect(DB_PATH) as db:
             await db.execute("""
@@ -243,115 +382,67 @@ class Applications(commands.Cog):
                 )
             """)
             await db.execute("""
+                CREATE TABLE IF NOT EXISTS application_panels (
+                    guild_id     INTEGER PRIMARY KEY,
+                    channel_id   INTEGER,
+                    title        TEXT NOT NULL DEFAULT '✈️ Apply to Korean Air',
+                    description  TEXT NOT NULL DEFAULT 'Click the button below to apply.',
+                    button_label TEXT NOT NULL DEFAULT 'Apply Now'
+                )
+            """)
+            await db.execute("""
+                CREATE TABLE IF NOT EXISTS application_questions (
+                    id             INTEGER PRIMARY KEY AUTOINCREMENT,
+                    guild_id       INTEGER NOT NULL,
+                    question_order INTEGER NOT NULL,
+                    question_text  TEXT    NOT NULL
+                )
+            """)
+            await db.execute("""
                 CREATE TABLE IF NOT EXISTS applications_config (
-                    guild_id                 INTEGER PRIMARY KEY,
-                    notification_channel_id  TEXT
+                    guild_id                INTEGER PRIMARY KEY,
+                    notification_channel_id TEXT
                 )
             """)
             await db.commit()
 
-    # -----------------------------------------------------------------------
-    # Commands
-    # -----------------------------------------------------------------------
+        self.bot.add_view(ApplicationPanelView())
 
-    @commands.hybrid_command(
-        name="apply",
-        description="Apply to Korean Air — the bot will interview you in your DMs",
-    )
-    @commands.guild_only()
-    async def apply(self, ctx: commands.Context):
-        """Start the application interview in the user's DMs."""
-        user = ctx.author
-
-        if user.id in self._active_interviews:
-            await ctx.send(
-                "You already have an application interview in progress — check your DMs.",
-                ephemeral=True,
-            )
-            return
-
-        async with aiosqlite.connect(DB_PATH) as db:
-            async with db.execute(
-                "SELECT id FROM applications WHERE guild_id = ? AND user_id = ? AND status = 'pending'",
-                (ctx.guild.id, str(user.id)),
-            ) as cur:
-                pending = await cur.fetchone()
-
-        if pending:
-            await ctx.send(
-                f"You already have a pending application (`#{pending[0]}`). "
-                "Please wait for it to be reviewed before applying again.",
-                ephemeral=True,
-            )
-            return
-
-        # Open the DM channel first so we can fail fast if DMs are closed
-        try:
-            intro = discord.Embed(
-                title="✈️ Korean Air Application",
-                description=(
-                    f"Welcome! I'll ask you **{len(QUESTIONS)} questions**.\n"
-                    f"Reply to each one in this DM. You have "
-                    f"**{ANSWER_TIMEOUT // 60} minutes** per question.\n"
-                    "Type `cancel` at any time to abort."
-                ),
-                color=KAL_BLUE,
-            )
-            await user.send(embed=intro)
-        except discord.Forbidden:
-            await ctx.send(
-                "I couldn't DM you. Please enable **Direct Messages** from server "
-                "members in your privacy settings, then run `/apply` again.",
-                ephemeral=True,
-            )
-            return
-
-        await ctx.send("📬 Check your DMs — your application interview has started!", ephemeral=True)
-
-        self._active_interviews.add(user.id)
-        try:
-            await self._run_interview(user, ctx.guild)
-        finally:
-            self._active_interviews.discard(user.id)
-
-    async def _run_interview(self, user: discord.User, guild: discord.Guild):
-        """Ask each question in DM, collect answers, then store and notify."""
-
+    async def _run_interview(self, user: discord.User, guild: discord.Guild, questions: list):
         def check(m: discord.Message) -> bool:
             return m.author.id == user.id and m.guild is None
 
         answers = []
-        for i, (dm_text, plain_text) in enumerate(QUESTIONS, start=1):
+        for i, question in enumerate(questions, start=1):
             q_embed = discord.Embed(
-                title=f"Question {i}",
-                description=dm_text,
+                title=f"Question {i} of {len(questions)}",
+                description=question,
                 color=QUESTION_COLOR,
             )
             await user.send(embed=q_embed)
+
             try:
                 reply = await self.bot.wait_for("message", check=check, timeout=ANSWER_TIMEOUT)
             except asyncio.TimeoutError:
-                timeout_embed = discord.Embed(
+                await user.send(embed=discord.Embed(
                     title="⏰ Application Timed Out",
-                    description="You took too long to answer. Run `/apply` in the server to start over.",
+                    description="You took too long to answer. Click **Apply Now** in the server to start over.",
                     color=0xE74C3C,
-                )
-                await user.send(embed=timeout_embed)
+                ))
                 return
 
             content = reply.content.strip()
             if content.lower() == "cancel":
-                cancel_embed = discord.Embed(
+                await user.send(embed=discord.Embed(
                     title="❌ Application Cancelled",
-                    description="Run `/apply` in the server to start over.",
+                    description="Your application has been cancelled and is not sent to the team for review.",
                     color=0xE74C3C,
-                )
-                await user.send(embed=cancel_embed)
+                ))
                 return
 
-            answers.append({"question": plain_text, "answer": content[:1000]})
+            answers.append({"question": question, "answer": content[:1000]})
 
-        # ── Confirmation step ──
+        # Confirmation step
         confirm_embed = discord.Embed(
             title="📋 Ready to Submit",
             description=(
@@ -367,13 +458,13 @@ class Applications(commands.Cog):
                 self.choice: str | None = None
 
             @discord.ui.button(label="Submit", style=discord.ButtonStyle.success)
-            async def submit(self, interaction: discord.Interaction, button: discord.ui.Button):
+            async def submit_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
                 self.choice = "submit"
                 self.stop()
                 await interaction.response.defer()
 
             @discord.ui.button(label="Cancel", style=discord.ButtonStyle.danger)
-            async def cancel(self, interaction: discord.Interaction, button: discord.ui.Button):
+            async def cancel_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
                 self.choice = "cancel"
                 self.stop()
                 await interaction.response.defer()
@@ -382,20 +473,16 @@ class Applications(commands.Cog):
         confirm_msg = await user.send(embed=confirm_embed, view=view)
         await view.wait()
 
-        # Disable buttons after interaction
         for item in view.children:
             item.disabled = True
         await confirm_msg.edit(view=view)
 
         if view.choice != "submit":
-            cancel_embed = discord.Embed(
+            await user.send(embed=discord.Embed(
                 title="Cancelled",
-                description=(
-                    "Your application has been cancelled and is not sent to the team for review."
-                ),
+                description="Your application has been cancelled and is not sent to the team for review.",
                 color=0xE74C3C,
-            )
-            await user.send(embed=cancel_embed)
+            ))
             return
 
         submitted_at = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
@@ -403,11 +490,8 @@ class Applications(commands.Cog):
 
         async with aiosqlite.connect(DB_PATH) as db:
             cursor = await db.execute(
-                """
-                INSERT INTO applications
-                    (guild_id, user_id, user_name, submitted_at, status, answers)
-                VALUES (?, ?, ?, ?, 'pending', ?)
-                """,
+                """INSERT INTO applications (guild_id, user_id, user_name, submitted_at, status, answers)
+                   VALUES (?, ?, ?, ?, 'pending', ?)""",
                 (guild.id, str(user.id), user.display_name, submitted_at, answers_json),
             )
             app_id = cursor.lastrowid
@@ -420,35 +504,33 @@ class Applications(commands.Cog):
                 row = await cur.fetchone()
                 notification_channel_id = row[0] if row else None
 
-        app_row = {
-            "id": app_id,
-            "guild_id": guild.id,
-            "user_id": str(user.id),
-            "user_name": user.display_name,
-            "submitted_at": submitted_at,
-            "status": "pending",
-            "answers": answers,
-            "reviewed_by": None,
-            "reviewed_at": None,
-            "review_notes": None,
-        }
-
-        submitted_embed = discord.Embed(
+        await user.send(embed=discord.Embed(
             title="Submitted",
             description=(
                 "Your application has been successfully submitted and is now pending review. "
                 "Please allow up to 24 hours for our team to process your application.\n\n"
                 "You will receive a direct message from me once a decision has been made. "
                 "To help us manage applications efficiently, please do not make a ticket, "
-                "DM or contact staff members regarding the status of your application."
+                "DM, or contact staff members regarding the status of your application."
             ),
             color=QUESTION_COLOR,
-        )
-        await user.send(embed=submitted_embed)
+        ))
 
         if notification_channel_id:
             channel = guild.get_channel(int(notification_channel_id))
             if channel:
+                app_row = {
+                    "id": app_id,
+                    "guild_id": guild.id,
+                    "user_id": str(user.id),
+                    "user_name": user.display_name,
+                    "submitted_at": submitted_at,
+                    "status": "pending",
+                    "answers": answers,
+                    "reviewed_by": None,
+                    "reviewed_at": None,
+                    "review_notes": None,
+                }
                 notify_embed = application_embed(app_row)
                 notify_embed.set_author(
                     name="New Application Submitted",
@@ -460,98 +542,81 @@ class Applications(commands.Cog):
                 except discord.Forbidden:
                     pass
 
+    # -----------------------------------------------------------------------
+    # Commands
+    # -----------------------------------------------------------------------
+
+    @commands.hybrid_command(
+        name="postapplicationpanel",
+        description="[Admin] Post a customizable application panel embed with button",
+    )
+    @app_commands.describe(channel="Channel to post the panel in")
+    @commands.has_permissions(administrator=True)
+    @app_commands.default_permissions(administrator=True)
+    @commands.guild_only()
+    async def postapplicationpanel(self, ctx: commands.Context, channel: discord.TextChannel):
+        if ctx.interaction is None:
+            await ctx.send("Please use the slash command `/postapplicationpanel` for this.", ephemeral=True)
+            return
+        await ctx.interaction.response.send_modal(PanelSetupModal(channel))
+
+    @commands.hybrid_command(
+        name="setapplicationquestions",
+        description="[Admin] Set the interview questions shown to applicants (up to 5)",
+    )
+    @commands.has_permissions(administrator=True)
+    @app_commands.default_permissions(administrator=True)
+    @commands.guild_only()
+    async def setapplicationquestions(self, ctx: commands.Context):
+        if ctx.interaction is None:
+            await ctx.send("Please use the slash command `/setapplicationquestions` for this.", ephemeral=True)
+            return
+        await ctx.interaction.response.send_modal(QuestionsModal(ctx.guild.id))
+
+    @commands.hybrid_command(
+        name="setapplicationchannel",
+        description="[Admin] Set the channel where submitted applications are posted for review",
+    )
+    @app_commands.describe(channel="The text channel to receive application notifications")
+    @commands.has_permissions(administrator=True)
+    @app_commands.default_permissions(administrator=True)
+    async def setapplicationchannel(self, ctx: commands.Context, channel: discord.TextChannel):
+        async with aiosqlite.connect(DB_PATH) as db:
+            await db.execute(
+                """INSERT INTO applications_config (guild_id, notification_channel_id)
+                   VALUES (?, ?)
+                   ON CONFLICT(guild_id) DO UPDATE SET notification_channel_id = excluded.notification_channel_id""",
+                (ctx.guild.id, str(channel.id)),
+            )
+            await db.commit()
+        await ctx.send(
+            f"Application notifications will now be posted to {channel.mention}.", ephemeral=True
+        )
+
     @commands.hybrid_command(
         name="myapplication",
         description="View the status of your most recent application",
     )
     @commands.guild_only()
     async def myapplication(self, ctx: commands.Context):
-        """Show the caller's most recent application (ephemeral)."""
         async with aiosqlite.connect(DB_PATH) as db:
             db.row_factory = aiosqlite.Row
             async with db.execute(
-                """
-                SELECT * FROM applications
-                WHERE guild_id = ? AND user_id = ?
-                ORDER BY id DESC
-                LIMIT 1
-                """,
+                """SELECT * FROM applications WHERE guild_id = ? AND user_id = ?
+                   ORDER BY id DESC LIMIT 1""",
                 (ctx.guild.id, str(ctx.author.id)),
             ) as cur:
                 row = await cur.fetchone()
 
         if row is None:
-            await ctx.send("You haven't submitted an application yet. Use `/apply` to start.", ephemeral=True)
+            await ctx.send(
+                "You haven't submitted an application yet. Click **Apply Now** in the applications channel.",
+                ephemeral=True,
+            )
             return
 
         embed = application_embed(dict(row))
         await ctx.send(embed=embed, ephemeral=True)
-
-    @commands.hybrid_command(
-        name="setapplicationchannel",
-        description="[Admin] Set the channel where applications are posted",
-    )
-    @app_commands.describe(channel="The text channel to receive application notifications")
-    @commands.has_permissions(administrator=True)
-    @app_commands.default_permissions(administrator=True)
-    async def setapplicationchannel(self, ctx: commands.Context, channel: discord.TextChannel):
-        """Save the notification channel for application submissions and decisions."""
-        async with aiosqlite.connect(DB_PATH) as db:
-            await db.execute(
-                """
-                INSERT INTO applications_config (guild_id, notification_channel_id)
-                VALUES (?, ?)
-                ON CONFLICT(guild_id) DO UPDATE SET notification_channel_id = excluded.notification_channel_id
-                """,
-                (ctx.guild.id, str(channel.id)),
-            )
-            await db.commit()
-
-        await ctx.send(
-            f"Application notifications will now be posted to {channel.mention}.",
-            ephemeral=True,
-        )
-
-
-    @commands.hybrid_command(
-        name="testapplication",
-        description="[Admin] Send the application questions to yourself as a DM test",
-    )
-    @commands.has_permissions(administrator=True)
-    @app_commands.default_permissions(administrator=True)
-    @commands.guild_only()
-    async def testapplication(self, ctx: commands.Context):
-        """DM the admin all question embeds in order — nothing is saved."""
-        try:
-            intro = discord.Embed(
-                title="✈️ Korean Air Application — Test Mode",
-                description=(
-                    f"Sending you all **{len(QUESTIONS)} question embeds** as a preview.\n"
-                    "Nothing will be saved."
-                ),
-                color=QUESTION_COLOR,
-            )
-            await ctx.author.send(embed=intro)
-        except discord.Forbidden:
-            await ctx.send("I couldn't DM you. Enable Direct Messages from server members and try again.", ephemeral=True)
-            return
-
-        await ctx.send("📬 Check your DMs — sending the test questions now.", ephemeral=True)
-
-        for i, (dm_text, _) in enumerate(QUESTIONS, start=1):
-            q_embed = discord.Embed(
-                title=f"Question {i}",
-                description=dm_text,
-                color=QUESTION_COLOR,
-            )
-            await ctx.author.send(embed=q_embed)
-
-        done_embed = discord.Embed(
-            title="✅ Test Complete",
-            description="That's all the questions. Nothing was saved.",
-            color=QUESTION_COLOR,
-        )
-        await ctx.author.send(embed=done_embed)
 
 
 async def setup(bot: commands.Bot):
