@@ -57,19 +57,14 @@ def application_embed(app_row: dict) -> discord.Embed:
 class PanelSetupModal(discord.ui.Modal, title="Application Panel Setup"):
     panel_title = discord.ui.TextInput(
         label="Embed Title",
-        placeholder="e.g. ATC24 Application",
+        placeholder="e.g. Korean Air Applications",
         max_length=256,
     )
     panel_description = discord.ui.TextInput(
-        label="Embed Description / Info",
+        label="Embed Description",
         style=discord.TextStyle.paragraph,
-        placeholder="Tell applicants what this panel is for...",
+        placeholder="Describe what applicants can apply for...",
         max_length=2000,
-    )
-    button_label = discord.ui.TextInput(
-        label="Button Label",
-        default="Apply Now",
-        max_length=80,
     )
 
     def __init__(self, channel: discord.TextChannel, notification: discord.TextChannel | None):
@@ -80,43 +75,47 @@ class PanelSetupModal(discord.ui.Modal, title="Application Panel Setup"):
     async def on_submit(self, interaction: discord.Interaction):
         title = self.panel_title.value.strip()
         description = self.panel_description.value.strip()
-        btn_label = self.button_label.value.strip()
         notif_id = str(self.notification.id) if self.notification else None
 
         async with aiosqlite.connect(DB_PATH) as db:
             cur = await db.execute(
-                """INSERT INTO application_panels
-                       (guild_id, title, description, button_label, notification_channel_id)
-                   VALUES (?, ?, ?, ?, ?)""",
-                (interaction.guild.id, title, description, btn_label, notif_id),
+                """INSERT INTO application_panels (guild_id, title, description, notification_channel_id)
+                   VALUES (?, ?, ?, ?)""",
+                (interaction.guild.id, title, description, notif_id),
             )
             panel_id = cur.lastrowid
             await db.commit()
 
-        embed = discord.Embed(title=title, description=description, color=KAL_BLUE)
-        view = ApplicationPanelView(panel_id, btn_label)
-        interaction.client.add_view(view)
-        await self.channel.send(embed=embed, view=view)
-
         notif_mention = self.notification.mention if self.notification else "not set"
         await interaction.response.send_message(
-            f"Panel **#{panel_id}** posted in {self.channel.mention}!\n"
+            f"Panel **#{panel_id}** created!\n"
             f"Notifications → {notif_mention}\n\n"
-            f"Run `/setpanelquestions {panel_id}` to add interview questions.",
+            f"Next steps:\n"
+            f"• `/addbutton {panel_id} label:\"ATC24 Application\"` to add a button\n"
+            f"• `/postpanel {panel_id}` to post the embed in {self.channel.mention}",
             ephemeral=True,
         )
+        # store channel for postpanel later
+        async with aiosqlite.connect(DB_PATH) as db:
+            await db.execute(
+                "UPDATE application_panels SET channel_id = ? WHERE id = ?",
+                (self.channel.id, panel_id),
+            )
+            await db.commit()
 
 
-class QuestionsModal(discord.ui.Modal, title="Set Panel Questions"):
+class ButtonQuestionsModal(discord.ui.Modal, title="Add Application Button"):
     q1 = discord.ui.TextInput(label="Question 1", required=True, max_length=300)
     q2 = discord.ui.TextInput(label="Question 2", required=False, max_length=300, default="")
     q3 = discord.ui.TextInput(label="Question 3", required=False, max_length=300, default="")
     q4 = discord.ui.TextInput(label="Question 4", required=False, max_length=300, default="")
     q5 = discord.ui.TextInput(label="Question 5", required=False, max_length=300, default="")
 
-    def __init__(self, panel_id: int):
+    def __init__(self, panel_id: int, label: str, emoji: str | None):
         super().__init__()
         self.panel_id = panel_id
+        self.btn_label = label
+        self.btn_emoji = emoji
 
     async def on_submit(self, interaction: discord.Interaction):
         questions = [
@@ -126,43 +125,69 @@ class QuestionsModal(discord.ui.Modal, title="Set Panel Questions"):
         ]
 
         async with aiosqlite.connect(DB_PATH) as db:
-            await db.execute(
-                "DELETE FROM application_questions WHERE panel_id = ?",
+            async with db.execute(
+                "SELECT COUNT(*) FROM application_buttons WHERE panel_id = ?",
                 (self.panel_id,),
+            ) as cur:
+                (count,) = await cur.fetchone()
+
+            cur = await db.execute(
+                "INSERT INTO application_buttons (panel_id, label, emoji, btn_order) VALUES (?, ?, ?, ?)",
+                (self.panel_id, self.btn_label, self.btn_emoji, count),
             )
+            button_id = cur.lastrowid
+
             for i, text in enumerate(questions, start=1):
                 await db.execute(
-                    "INSERT INTO application_questions (panel_id, question_order, question_text) VALUES (?, ?, ?)",
-                    (self.panel_id, i, text),
+                    "INSERT INTO application_questions (button_id, question_order, question_text) VALUES (?, ?, ?)",
+                    (button_id, i, text),
                 )
             await db.commit()
 
         await interaction.response.send_message(
-            f"Saved **{len(questions)}** question(s) for Panel #{self.panel_id}.", ephemeral=True
+            f"Button **\"{self.btn_label}\"** added to Panel #{self.panel_id} with **{len(questions)}** question(s).\n"
+            f"Run `/postpanel {self.panel_id}` to (re)post the embed with the updated buttons.",
+            ephemeral=True,
         )
 
 
 # ---------------------------------------------------------------------------
-# Application panel view (persistent, one per panel ID)
+# Application panel view (one per panel, contains all its buttons)
 # ---------------------------------------------------------------------------
 
+async def build_panel_view(panel_id: int) -> "ApplicationPanelView | None":
+    async with aiosqlite.connect(DB_PATH) as db:
+        async with db.execute(
+            "SELECT id, label, emoji FROM application_buttons WHERE panel_id = ? ORDER BY btn_order",
+            (panel_id,),
+        ) as cur:
+            rows = await cur.fetchall()
+
+    if not rows:
+        return None
+
+    buttons = [{"id": r[0], "label": r[1], "emoji": r[2]} for r in rows]
+    return ApplicationPanelView(panel_id, buttons)
+
+
 class ApplicationPanelView(discord.ui.View):
-    def __init__(self, panel_id: int, button_label: str = "Apply Now"):
+    def __init__(self, panel_id: int, buttons: list):
         super().__init__(timeout=None)
-        self.add_item(ApplyButton(panel_id, button_label))
+        for btn in buttons:
+            self.add_item(ApplyButton(btn["id"], btn["label"], btn.get("emoji")))
 
 
 class ApplyButton(discord.ui.Button):
-    def __init__(self, panel_id: int, label: str = "Apply Now"):
+    def __init__(self, button_id: int, label: str, emoji: str | None = None):
         super().__init__(
             label=label,
-            custom_id=f"app:panel:{panel_id}",
+            custom_id=f"app:btn:{button_id}",
             style=discord.ButtonStyle.primary,
-            emoji="✈️",
+            emoji=emoji or None,
         )
 
     async def callback(self, interaction: discord.Interaction):
-        panel_id = int(self.custom_id.split(":")[-1])
+        button_id = int(self.custom_id.split(":")[-1])
         cog: "Applications" = interaction.client.cogs.get("Applications")
         if cog is None:
             return await interaction.response.send_message("Bot error — please contact an admin.", ephemeral=True)
@@ -183,14 +208,17 @@ class ApplyButton(discord.ui.Button):
                 pending = await cur.fetchone()
 
             async with db.execute(
-                "SELECT title, notification_channel_id FROM application_panels WHERE id = ?",
-                (panel_id,),
+                """SELECT ab.label, ap.notification_channel_id
+                   FROM application_buttons ab
+                   JOIN application_panels ap ON ap.id = ab.panel_id
+                   WHERE ab.id = ?""",
+                (button_id,),
             ) as cur:
-                panel_row = await cur.fetchone()
+                btn_row = await cur.fetchone()
 
             async with db.execute(
-                "SELECT question_text FROM application_questions WHERE panel_id = ? ORDER BY question_order",
-                (panel_id,),
+                "SELECT question_text FROM application_questions WHERE button_id = ? ORDER BY question_order",
+                (button_id,),
             ) as cur:
                 q_rows = await cur.fetchall()
 
@@ -201,17 +229,17 @@ class ApplyButton(discord.ui.Button):
                 ephemeral=True,
             )
 
-        if not panel_row:
+        if not btn_row:
             return await interaction.response.send_message(
-                "This panel no longer exists. Please contact an admin.", ephemeral=True
+                "This button no longer exists. Please contact an admin.", ephemeral=True
             )
 
-        panel_title, notif_channel_id = panel_row
+        btn_label, notif_channel_id = btn_row
         questions = [r[0] for r in q_rows]
 
         if not questions:
             return await interaction.response.send_message(
-                "No questions have been set up for this panel yet. Ask an admin to run `/setpanelquestions`.",
+                "No questions have been set up for this section yet. Ask an admin.",
                 ephemeral=True,
             )
 
@@ -219,7 +247,7 @@ class ApplyButton(discord.ui.Button):
             intro = discord.Embed(
                 title="✈️ Korean Air Application",
                 description=(
-                    f"Welcome! I'll ask you **{len(questions)} question(s)**.\n"
+                    f"Welcome! I'll ask you **{len(questions)} question(s)** for **{btn_label}**.\n"
                     f"Reply to each one in this DM. You have "
                     f"**{ANSWER_TIMEOUT // 60} minutes** per question.\n\n"
                     "Type `cancel` at any time to abort."
@@ -240,7 +268,7 @@ class ApplyButton(discord.ui.Button):
 
         cog._active_interviews.add(user.id)
         try:
-            await cog._run_interview(user, guild, questions, panel_title, notif_channel_id)
+            await cog._run_interview(user, guild, questions, btn_label, notif_channel_id)
         finally:
             cog._active_interviews.discard(user.id)
 
@@ -404,27 +432,43 @@ class Applications(commands.Cog):
             except Exception:
                 pass
 
-            # Migrate old single-panel schema (guild_id PK) to multi-panel (id PK)
+            # Drop old incompatible schemas and recreate cleanly
             try:
-                await db.execute("SELECT id FROM application_panels LIMIT 1")
+                await db.execute("SELECT id, channel_id FROM application_panels LIMIT 1")
+                # also check for application_buttons
+                try:
+                    await db.execute("SELECT id FROM application_buttons LIMIT 1")
+                except Exception:
+                    # panels table exists but buttons table doesn't — need buttons table
+                    pass
             except Exception:
                 await db.execute("DROP TABLE IF EXISTS application_panels")
+                await db.execute("DROP TABLE IF EXISTS application_buttons")
                 await db.execute("DROP TABLE IF EXISTS application_questions")
 
             await db.execute("""
                 CREATE TABLE IF NOT EXISTS application_panels (
                     id                      INTEGER PRIMARY KEY AUTOINCREMENT,
                     guild_id                INTEGER NOT NULL,
+                    channel_id              INTEGER,
                     title                   TEXT NOT NULL,
                     description             TEXT NOT NULL DEFAULT '',
-                    button_label            TEXT NOT NULL DEFAULT 'Apply Now',
                     notification_channel_id TEXT
+                )
+            """)
+            await db.execute("""
+                CREATE TABLE IF NOT EXISTS application_buttons (
+                    id        INTEGER PRIMARY KEY AUTOINCREMENT,
+                    panel_id  INTEGER NOT NULL,
+                    label     TEXT    NOT NULL,
+                    emoji     TEXT,
+                    btn_order INTEGER NOT NULL DEFAULT 0
                 )
             """)
             await db.execute("""
                 CREATE TABLE IF NOT EXISTS application_questions (
                     id             INTEGER PRIMARY KEY AUTOINCREMENT,
-                    panel_id       INTEGER NOT NULL,
+                    button_id      INTEGER NOT NULL,
                     question_order INTEGER NOT NULL,
                     question_text  TEXT    NOT NULL
                 )
@@ -437,13 +481,13 @@ class Applications(commands.Cog):
             """)
             await db.commit()
 
-            async with db.execute(
-                "SELECT id, button_label FROM application_panels"
-            ) as cur:
-                panels = await cur.fetchall()
+            async with db.execute("SELECT id FROM application_panels") as cur:
+                panel_ids = [r[0] for r in await cur.fetchall()]
 
-        for panel_id, btn_label in panels:
-            self.bot.add_view(ApplicationPanelView(panel_id, btn_label))
+        for panel_id in panel_ids:
+            view = await build_panel_view(panel_id)
+            if view:
+                self.bot.add_view(view)
 
     async def _run_interview(
         self,
@@ -592,39 +636,49 @@ class Applications(commands.Cog):
     # -----------------------------------------------------------------------
 
     @commands.hybrid_command(
-        name="postapplicationpanel",
-        description="[Admin] Post a new application panel embed with button",
+        name="createpanel",
+        description="[Admin] Create a new application panel (embed + buttons)",
     )
     @app_commands.describe(
         channel="Channel to post the panel in",
-        notification="Channel where new submissions are posted for staff review",
+        notification="Channel where submissions are posted for staff review",
     )
     @commands.has_permissions(administrator=True)
     @app_commands.default_permissions(administrator=True)
     @commands.guild_only()
-    async def postapplicationpanel(
+    async def createpanel(
         self,
         ctx: commands.Context,
         channel: discord.TextChannel,
         notification: discord.TextChannel = None,
     ):
         if ctx.interaction is None:
-            await ctx.send("Please use the slash command `/postapplicationpanel`.", ephemeral=True)
+            await ctx.send("Please use the slash command `/createpanel`.", ephemeral=True)
             return
         await ctx.interaction.response.send_modal(PanelSetupModal(channel, notification))
 
     @commands.hybrid_command(
-        name="setpanelquestions",
-        description="[Admin] Set interview questions for a specific panel",
+        name="addbutton",
+        description="[Admin] Add a button with its own questions to a panel",
     )
-    @app_commands.describe(panel_id="Panel ID shown when you ran /postapplicationpanel")
+    @app_commands.describe(
+        panel_id="Panel ID from /createpanel",
+        label="Button label (e.g. ATC24 Application)",
+        emoji="Optional emoji for the button",
+    )
     @commands.has_permissions(administrator=True)
     @app_commands.default_permissions(administrator=True)
     @commands.guild_only()
-    async def setpanelquestions(self, ctx: commands.Context, panel_id: int):
+    async def addbutton(
+        self,
+        ctx: commands.Context,
+        panel_id: int,
+        label: str,
+        emoji: str = None,
+    ):
         async with aiosqlite.connect(DB_PATH) as db:
             async with db.execute(
-                "SELECT title FROM application_panels WHERE id = ? AND guild_id = ?",
+                "SELECT id FROM application_panels WHERE id = ? AND guild_id = ?",
                 (panel_id, ctx.guild.id),
             ) as cur:
                 row = await cur.fetchone()
@@ -634,10 +688,51 @@ class Applications(commands.Cog):
             return
 
         if ctx.interaction is None:
-            await ctx.send("Please use the slash command `/setpanelquestions`.", ephemeral=True)
+            await ctx.send("Please use the slash command `/addbutton`.", ephemeral=True)
             return
 
-        await ctx.interaction.response.send_modal(QuestionsModal(panel_id))
+        await ctx.interaction.response.send_modal(ButtonQuestionsModal(panel_id, label, emoji))
+
+    @commands.hybrid_command(
+        name="postpanel",
+        description="[Admin] Post (or re-post) a panel embed with all its buttons",
+    )
+    @app_commands.describe(panel_id="Panel ID from /createpanel")
+    @commands.has_permissions(administrator=True)
+    @app_commands.default_permissions(administrator=True)
+    @commands.guild_only()
+    async def postpanel(self, ctx: commands.Context, panel_id: int):
+        await ctx.defer(ephemeral=True)
+
+        async with aiosqlite.connect(DB_PATH) as db:
+            async with db.execute(
+                "SELECT title, description, channel_id FROM application_panels WHERE id = ? AND guild_id = ?",
+                (panel_id, ctx.guild.id),
+            ) as cur:
+                panel_row = await cur.fetchone()
+
+        if not panel_row:
+            await ctx.send(f"Panel #{panel_id} not found in this server.", ephemeral=True)
+            return
+
+        title, description, channel_id = panel_row
+        channel = ctx.guild.get_channel(channel_id) if channel_id else None
+        if not channel:
+            await ctx.send("Panel channel not found. Please specify a channel.", ephemeral=True)
+            return
+
+        view = await build_panel_view(panel_id)
+        if not view:
+            await ctx.send(
+                f"Panel #{panel_id} has no buttons yet. Use `/addbutton {panel_id}` first.",
+                ephemeral=True,
+            )
+            return
+
+        self.bot.add_view(view)
+        embed = discord.Embed(title=title, description=description, color=KAL_BLUE)
+        await channel.send(embed=embed, view=view)
+        await ctx.send(f"Panel posted in {channel.mention}.", ephemeral=True)
 
     @commands.hybrid_command(
         name="listpanels",
@@ -649,25 +744,30 @@ class Applications(commands.Cog):
     async def listpanels(self, ctx: commands.Context):
         async with aiosqlite.connect(DB_PATH) as db:
             async with db.execute(
-                "SELECT id, title, button_label, notification_channel_id FROM application_panels WHERE guild_id = ?",
+                "SELECT id, title, notification_channel_id FROM application_panels WHERE guild_id = ?",
                 (ctx.guild.id,),
             ) as cur:
-                rows = await cur.fetchall()
+                panels = await cur.fetchall()
 
-        if not rows:
-            await ctx.send(
-                "No panels yet. Use `/postapplicationpanel` to create one.", ephemeral=True
-            )
+        if not panels:
+            await ctx.send("No panels yet. Use `/createpanel` to get started.", ephemeral=True)
             return
 
         embed = discord.Embed(title="Application Panels", color=KAL_BLUE)
-        for panel_id, title, btn_label, notif_id in rows:
-            notif = f"<#{notif_id}>" if notif_id else "not set"
-            embed.add_field(
-                name=f"#{panel_id} — {title}",
-                value=f"Button: **{btn_label}** | Notifications: {notif}\n`/setpanelquestions {panel_id}` to edit questions",
-                inline=False,
-            )
+        async with aiosqlite.connect(DB_PATH) as db:
+            for panel_id, title, notif_id in panels:
+                async with db.execute(
+                    "SELECT label FROM application_buttons WHERE panel_id = ? ORDER BY btn_order",
+                    (panel_id,),
+                ) as cur:
+                    btns = await cur.fetchall()
+                notif = f"<#{notif_id}>" if notif_id else "not set"
+                btn_list = " · ".join(f'"{r[0]}"' for r in btns) or "none — use `/addbutton {panel_id}`"
+                embed.add_field(
+                    name=f"#{panel_id} — {title}",
+                    value=f"Notifications: {notif}\nButtons: {btn_list}",
+                    inline=False,
+                )
         await ctx.send(embed=embed, ephemeral=True)
 
     @commands.hybrid_command(
