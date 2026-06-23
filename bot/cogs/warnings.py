@@ -226,5 +226,20 @@ class Warnings(commands.Cog):
         return embed
 
 
+    @commands.hybrid_command(name="setwarnlog", description="[Admin] Set the channel for warn/strike logs")
+    @commands.has_permissions(administrator=True)
+    @app_commands.default_permissions(administrator=True)
+    @app_commands.describe(channel="Channel to post warn/strike embeds in")
+    async def setwarnlog(self, ctx: commands.Context, channel: discord.TextChannel):
+        async with aiosqlite.connect(DB_PATH) as db:
+            await db.execute(
+                """INSERT INTO warn_config (guild_id, log_channel_id) VALUES (?, ?)
+                   ON CONFLICT(guild_id) DO UPDATE SET log_channel_id = excluded.log_channel_id""",
+                (ctx.guild.id, channel.id),
+            )
+            await db.commit()
+        await ctx.send(f"Warn log channel set to {channel.mention}.", ephemeral=True)
+
+
 async def setup(bot: commands.Bot):
     await bot.add_cog(Warnings(bot))
