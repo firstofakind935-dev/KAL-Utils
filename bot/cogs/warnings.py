@@ -298,6 +298,60 @@ class Warnings(commands.Cog):
         await self._post_embed(log_channel, embed)
         await ctx.send(f"{label} issued for {member.mention}.", ephemeral=True)
 
+    @commands.hybrid_command(name="warnings", description="[Admin] View a member's warn/strike history")
+    @commands.has_permissions(administrator=True)
+    @app_commands.default_permissions(administrator=True)
+    @app_commands.describe(member="The member to check")
+    async def warnings(self, ctx: commands.Context, member: discord.Member):
+        now = datetime.now(timezone.utc).isoformat()
+
+        async with aiosqlite.connect(DB_PATH) as db:
+            async with db.execute(
+                """SELECT id, reason, issued_at, expires_at FROM warnings
+                   WHERE guild_id = ? AND user_id = ? ORDER BY issued_at""",
+                (ctx.guild.id, member.id),
+            ) as cur:
+                warn_rows = await cur.fetchall()
+            async with db.execute(
+                """SELECT id, strike_number, reason, issued_at FROM strikes
+                   WHERE guild_id = ? AND user_id = ? ORDER BY issued_at""",
+                (ctx.guild.id, member.id),
+            ) as cur:
+                strike_rows = await cur.fetchall()
+
+        active_count = sum(
+            1 for _, _, _, expires_at in warn_rows
+            if expires_at is None or expires_at > now
+        )
+
+        embed = discord.Embed(
+            title=f"Warn/Strike History — {member.display_name}",
+            color=0x3498DB,
+            timestamp=datetime.now(timezone.utc),
+        )
+        embed.set_thumbnail(url=member.display_avatar.url)
+        embed.add_field(name="Active Warnings", value=str(active_count), inline=True)
+        embed.add_field(name="Total Strikes", value=str(len(strike_rows)), inline=True)
+
+        if warn_rows:
+            warn_lines = []
+            for wid, reason, issued_at, expires_at in warn_rows:
+                status = "✅" if (expires_at is None or expires_at > now) else "❌ Expired"
+                warn_lines.append(f"`ID {wid}` {status} — {reason[:50]}")
+            embed.add_field(name="Warnings", value="\n".join(warn_lines[:10]), inline=False)
+
+        if strike_rows:
+            strike_lines = [
+                f"`ID {sid}` Strike #{snum} — {reason[:50]}"
+                for sid, snum, reason, _ in strike_rows
+            ]
+            embed.add_field(name="Strikes", value="\n".join(strike_lines), inline=False)
+
+        if not warn_rows and not strike_rows:
+            embed.description = "No warnings or strikes on record."
+
+        await ctx.send(embed=embed, ephemeral=True)
+
 
 async def setup(bot: commands.Bot):
     await bot.add_cog(Warnings(bot))
