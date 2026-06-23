@@ -352,6 +352,32 @@ class Warnings(commands.Cog):
 
         await ctx.send(embed=embed, ephemeral=True)
 
+    @commands.hybrid_command(name="removewarn", description="[Admin] Remove a specific warning by ID")
+    @commands.has_permissions(administrator=True)
+    @app_commands.default_permissions(administrator=True)
+    @app_commands.describe(
+        member="The member to remove the warning from",
+        warn_id="The warning ID — use /warnings to find it",
+    )
+    async def removewarn(self, ctx: commands.Context, member: discord.Member, warn_id: int):
+        async with aiosqlite.connect(DB_PATH) as db:
+            async with db.execute(
+                "SELECT id FROM warnings WHERE id = ? AND guild_id = ? AND user_id = ?",
+                (warn_id, ctx.guild.id, member.id),
+            ) as cur:
+                row = await cur.fetchone()
+            if not row:
+                return await ctx.send("Warning not found for this member.", ephemeral=True)
+            await db.execute("DELETE FROM warnings WHERE id = ?", (warn_id,))
+            await db.commit()
+
+        log_channel = await self._get_log_channel(ctx.guild)
+        if log_channel:
+            embed = self._removal_embed(ctx.guild, member, f"Warning #{warn_id} Removed", ctx.author)
+            await self._post_embed(log_channel, embed)
+
+        await ctx.send(f"Warning `{warn_id}` removed for {member.mention}.", ephemeral=True)
+
 
 async def setup(bot: commands.Bot):
     await bot.add_cog(Warnings(bot))
