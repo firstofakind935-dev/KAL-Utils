@@ -73,6 +73,14 @@ class Warnings(commands.Cog):
                     triggering_warn_id INTEGER NOT NULL
                 )
             """)
+            await db.execute("""
+                CREATE INDEX IF NOT EXISTS idx_warnings_guild_user
+                    ON warnings (guild_id, user_id)
+            """)
+            await db.execute("""
+                CREATE INDEX IF NOT EXISTS idx_strikes_guild_user
+                    ON strikes (guild_id, user_id)
+            """)
             await db.commit()
 
     async def _get_log_channel(self, guild: discord.Guild) -> Optional[discord.TextChannel]:
