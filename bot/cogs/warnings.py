@@ -38,5 +38,72 @@ def _parse_expires_at(amount: int, unit: str) -> Optional[str]:
     return dt.isoformat()
 
 
+class Warnings(commands.Cog):
+    def __init__(self, bot: commands.Bot):
+        self.bot = bot
+
+    async def cog_load(self):
+        async with aiosqlite.connect(DB_PATH) as db:
+            await db.execute("""
+                CREATE TABLE IF NOT EXISTS warn_config (
+                    guild_id       INTEGER PRIMARY KEY,
+                    log_channel_id INTEGER NOT NULL
+                )
+            """)
+            await db.execute("""
+                CREATE TABLE IF NOT EXISTS warnings (
+                    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+                    guild_id   INTEGER NOT NULL,
+                    user_id    INTEGER NOT NULL,
+                    reason     TEXT NOT NULL,
+                    issued_by  INTEGER NOT NULL,
+                    issued_at  TEXT NOT NULL,
+                    expires_at TEXT
+                )
+            """)
+            await db.execute("""
+                CREATE TABLE IF NOT EXISTS strikes (
+                    id                 INTEGER PRIMARY KEY AUTOINCREMENT,
+                    guild_id           INTEGER NOT NULL,
+                    user_id            INTEGER NOT NULL,
+                    strike_number      INTEGER NOT NULL,
+                    reason             TEXT NOT NULL,
+                    issued_by          INTEGER NOT NULL,
+                    issued_at          TEXT NOT NULL,
+                    triggering_warn_id INTEGER NOT NULL
+                )
+            """)
+            await db.commit()
+
+    async def _get_log_channel(self, guild: discord.Guild) -> Optional[discord.TextChannel]:
+        async with aiosqlite.connect(DB_PATH) as db:
+            async with db.execute(
+                "SELECT log_channel_id FROM warn_config WHERE guild_id = ?",
+                (guild.id,),
+            ) as cur:
+                row = await cur.fetchone()
+        if not row:
+            return None
+        return guild.get_channel(row[0])
+
+    async def _get_active_warn_count(self, guild_id: int, user_id: int) -> int:
+        now = datetime.now(timezone.utc).isoformat()
+        async with aiosqlite.connect(DB_PATH) as db:
+            async with db.execute(
+                """SELECT COUNT(*) FROM warnings
+                   WHERE guild_id = ? AND user_id = ?
+                   AND (expires_at IS NULL OR expires_at > ?)""",
+                (guild_id, user_id, now),
+            ) as cur:
+                row = await cur.fetchone()
+        return row[0] if row else 0
+
+    async def _post_embed(self, channel: discord.TextChannel, embed: discord.Embed):
+        try:
+            await channel.send(embed=embed)
+        except (discord.Forbidden, discord.HTTPException):
+            pass
+
+
 async def setup(bot: commands.Bot):
-    pass  # placeholder — replaced in Task 3
+    await bot.add_cog(Warnings(bot))
