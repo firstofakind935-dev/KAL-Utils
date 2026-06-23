@@ -378,6 +378,34 @@ class Warnings(commands.Cog):
 
         await ctx.send(f"Warning `{warn_id}` removed for {member.mention}.", ephemeral=True)
 
+    @commands.hybrid_command(name="removestrike", description="[Admin] Remove a specific strike by ID")
+    @commands.has_permissions(administrator=True)
+    @app_commands.default_permissions(administrator=True)
+    @app_commands.describe(
+        member="The member to remove the strike from",
+        strike_id="The strike ID — use /warnings to find it",
+    )
+    async def removestrike(self, ctx: commands.Context, member: discord.Member, strike_id: int):
+        async with aiosqlite.connect(DB_PATH) as db:
+            async with db.execute(
+                """SELECT id, strike_number FROM strikes
+                   WHERE id = ? AND guild_id = ? AND user_id = ?""",
+                (strike_id, ctx.guild.id, member.id),
+            ) as cur:
+                row = await cur.fetchone()
+            if not row:
+                return await ctx.send("Strike not found for this member.", ephemeral=True)
+            strike_num = row[1]
+            await db.execute("DELETE FROM strikes WHERE id = ?", (strike_id,))
+            await db.commit()
+
+        log_channel = await self._get_log_channel(ctx.guild)
+        if log_channel:
+            embed = self._removal_embed(ctx.guild, member, f"Strike #{strike_num} Removed", ctx.author)
+            await self._post_embed(log_channel, embed)
+
+        await ctx.send(f"Strike `{strike_id}` removed for {member.mention}.", ephemeral=True)
+
 
 async def setup(bot: commands.Bot):
     await bot.add_cog(Warnings(bot))
