@@ -24,6 +24,7 @@ COGS = [
     "cogs.flightplan",
     "cogs.applications",
     "cogs.security",
+    "cogs.warnings",
 ]
 
 intents = discord.Intents.default()
