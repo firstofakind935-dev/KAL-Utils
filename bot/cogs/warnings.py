@@ -112,6 +112,109 @@ class Warnings(commands.Cog):
         except (discord.Forbidden, discord.HTTPException):
             pass
 
+    def _warn_embed(
+        self,
+        guild: discord.Guild,
+        member: discord.Member,
+        warn_num: int,
+        reason: str,
+        expires_at: Optional[str],
+        issued_by: discord.Member,
+    ) -> discord.Embed:
+        ex = discord.utils.get(guild.emojis, name="KE_Exclamation")
+        eu = discord.utils.get(guild.emojis, name="KE_User")
+        eb = discord.utils.get(guild.emojis, name="KE_Badge")
+        ea = discord.utils.get(guild.emojis, name="KE_Arrow")
+
+        top_role = next((r for r in reversed(member.roles) if r.name != "@everyone"), None)
+        position = top_role.mention if top_role else "No role"
+
+        if expires_at:
+            dt = datetime.fromisoformat(expires_at)
+            expires_str = discord.utils.format_dt(dt, style="R")
+        else:
+            expires_str = "Permanent"
+
+        embed = discord.Embed(
+            title=f"{ex or '⚠️'} Warning #{warn_num}",
+            color=0xF1C40F,
+            timestamp=datetime.now(timezone.utc),
+        )
+        embed.add_field(name=f"{eu or ''} User", value=member.mention, inline=False)
+        embed.add_field(name=f"{eb or ''} Position", value=position, inline=False)
+        embed.add_field(name=f"{ea or ''} Reason", value=reason, inline=False)
+        embed.add_field(name="Expires", value=expires_str, inline=True)
+        embed.add_field(name="Issued by", value=issued_by.mention, inline=True)
+        embed.set_thumbnail(url=member.display_avatar.url)
+        return embed
+
+    def _strike_embed(
+        self,
+        guild: discord.Guild,
+        member: discord.Member,
+        strike_num: int,
+        warn_count: int,
+        reason: str,
+        expires_at: Optional[str],
+        issued_by: discord.Member,
+    ) -> discord.Embed:
+        ex = discord.utils.get(guild.emojis, name="KE_Exclamation")
+        eu = discord.utils.get(guild.emojis, name="KE_User")
+        eb = discord.utils.get(guild.emojis, name="KE_Badge")
+        ea = discord.utils.get(guild.emojis, name="KE_Arrow")
+
+        top_role = next((r for r in reversed(member.roles) if r.name != "@everyone"), None)
+        position = top_role.mention if top_role else "No role"
+
+        color = 0xE74C3C if strike_num == 3 else 0xE67E22
+
+        if expires_at:
+            dt = datetime.fromisoformat(expires_at)
+            expires_str = discord.utils.format_dt(dt, style="R")
+        else:
+            expires_str = "Permanent"
+
+        embed = discord.Embed(
+            title=f"{ex or '🚨'} Strike #{strike_num}",
+            color=color,
+            timestamp=datetime.now(timezone.utc),
+        )
+        embed.add_field(name=f"{eu or ''} User", value=member.mention, inline=False)
+        embed.add_field(name=f"{eb or ''} Position", value=position, inline=False)
+        embed.add_field(name=f"{ea or ''} Reason", value=reason, inline=False)
+        embed.add_field(name="Active Warnings", value=str(warn_count), inline=True)
+        embed.add_field(name="Expires", value=expires_str, inline=True)
+        embed.add_field(name="Issued by", value=issued_by.mention, inline=True)
+        if strike_num == 3:
+            embed.add_field(
+                name="⚠️ Action Required",
+                value="This member has reached 3 strikes. Admin action (role removal or termination) is required.",
+                inline=False,
+            )
+        embed.set_thumbnail(url=member.display_avatar.url)
+        return embed
+
+    def _removal_embed(
+        self,
+        guild: discord.Guild,
+        member: discord.Member,
+        action: str,
+        issued_by: discord.Member,
+    ) -> discord.Embed:
+        ex = discord.utils.get(guild.emojis, name="KE_Exclamation")
+        eu = discord.utils.get(guild.emojis, name="KE_User")
+        ea = discord.utils.get(guild.emojis, name="KE_Arrow")
+
+        embed = discord.Embed(
+            title=f"{ex or '✅'} {action}",
+            color=0x2ECC71,
+            timestamp=datetime.now(timezone.utc),
+        )
+        embed.add_field(name=f"{eu or ''} User", value=member.mention, inline=False)
+        embed.add_field(name=f"{ea or ''} Action by", value=issued_by.mention, inline=False)
+        embed.set_thumbnail(url=member.display_avatar.url)
+        return embed
+
 
 async def setup(bot: commands.Bot):
     await bot.add_cog(Warnings(bot))
