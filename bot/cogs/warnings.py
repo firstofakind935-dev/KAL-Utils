@@ -429,6 +429,29 @@ class Warnings(commands.Cog):
 
         await ctx.send(f"All warnings and strikes cleared for {member.mention}.", ephemeral=True)
 
+    @commands.hybrid_command(name="testwarn", description="[Admin] Post a fake warn embed to verify setup")
+    @commands.has_permissions(administrator=True)
+    @app_commands.default_permissions(administrator=True)
+    async def testwarn(self, ctx: commands.Context):
+        log_channel = await self._get_log_channel(ctx.guild)
+        if not log_channel:
+            return await ctx.send("No warn log channel set. Use `/setwarnlog` first.", ephemeral=True)
+
+        embed = self._warn_embed(
+            ctx.guild,
+            ctx.author,
+            warn_num=1,
+            reason="TEST — This is a test warning. No DB changes were made.",
+            expires_at=None,
+            issued_by=ctx.author,
+        )
+        embed.title = embed.title.replace("Warning", "TEST Warning")
+        embed.description = "This is a **test** triggered by staff. No action has been taken."
+        embed.color = discord.Color.orange()
+
+        await self._post_embed(log_channel, embed)
+        await ctx.send(f"✅ Test embed posted to {log_channel.mention}.", ephemeral=True)
+
 
 async def setup(bot: commands.Bot):
     await bot.add_cog(Warnings(bot))
