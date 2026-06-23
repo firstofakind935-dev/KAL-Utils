@@ -263,36 +263,42 @@ class Warnings(commands.Cog):
         if not log_channel:
             return await ctx.send("No warn log channel set. Use `/setwarnlog` first.", ephemeral=True)
 
-        if bool(amount) != bool(unit):
+        if (amount is None) != (unit is None):
             return await ctx.send("Provide both `amount` and `unit`, or neither (for permanent).", ephemeral=True)
 
-        expires_at = _parse_expires_at(amount, unit) if (amount and unit) else None
-        now = datetime.now(timezone.utc).isoformat()
-        old_count = await self._get_active_warn_count(ctx.guild.id, member.id)
-        new_count = old_count + 1
-        strike_num = _threshold_crossed(old_count, new_count)
+        expires_at = _parse_expires_at(amount, unit) if (amount is not None and unit is not None) else None
 
         async with aiosqlite.connect(DB_PATH) as db:
+            now_iso = datetime.now(timezone.utc).isoformat()
+            async with db.execute(
+                """SELECT COUNT(*) FROM warnings
+                   WHERE guild_id = ? AND user_id = ?
+                   AND (expires_at IS NULL OR expires_at > ?)""",
+                (ctx.guild.id, member.id, now_iso),
+            ) as cur:
+                count_row = await cur.fetchone()
+            old_count = count_row[0] if count_row else 0
+            new_count = old_count + 1
+            strike_num = _threshold_crossed(old_count, new_count)
+            effective_reason = strike_reason or reason if strike_num else None
+
             cursor = await db.execute(
                 """INSERT INTO warnings (guild_id, user_id, reason, issued_by, issued_at, expires_at)
                    VALUES (?, ?, ?, ?, ?, ?)""",
-                (ctx.guild.id, member.id, reason, ctx.author.id, now, expires_at),
+                (ctx.guild.id, member.id, reason, ctx.author.id, now_iso, expires_at),
             )
             warn_id = cursor.lastrowid
 
             if strike_num:
-                effective_reason = strike_reason or reason
                 await db.execute(
                     """INSERT INTO strikes
                        (guild_id, user_id, strike_number, reason, issued_by, issued_at, triggering_warn_id)
                        VALUES (?, ?, ?, ?, ?, ?, ?)""",
-                    (ctx.guild.id, member.id, strike_num, effective_reason, ctx.author.id, now, warn_id),
+                    (ctx.guild.id, member.id, strike_num, effective_reason, ctx.author.id, now_iso, warn_id),
                 )
-
             await db.commit()
 
         if strike_num:
-            effective_reason = strike_reason or reason
             embed = self._strike_embed(ctx.guild, member, strike_num, new_count, effective_reason, expires_at, ctx.author)
             label = f"Strike #{strike_num}"
         else:
@@ -380,7 +386,11 @@ class Warnings(commands.Cog):
             embed = self._removal_embed(ctx.guild, member, f"Warning #{warn_id} Removed", ctx.author)
             await self._post_embed(log_channel, embed)
 
-        await ctx.send(f"Warning `{warn_id}` removed for {member.mention}.", ephemeral=True)
+        await ctx.send(
+            f"Warning `{warn_id}` removed for {member.mention}.\n"
+            "If this warning triggered a strike, remove it separately with `/removestrike`.",
+            ephemeral=True,
+        )
 
     @commands.hybrid_command(name="removestrike", description="[Admin] Remove a specific strike by ID")
     @commands.has_permissions(administrator=True)
@@ -451,7 +461,6 @@ class Warnings(commands.Cog):
         )
         embed.title = embed.title.replace("Warning", "TEST Warning")
         embed.description = "This is a **test** triggered by staff. No action has been taken."
-        embed.color = discord.Color.orange()
 
         await self._post_embed(log_channel, embed)
         await ctx.send(f"✅ Test embed posted to {log_channel.mention}.", ephemeral=True)
