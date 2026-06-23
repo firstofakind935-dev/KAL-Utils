@@ -240,6 +240,64 @@ class Warnings(commands.Cog):
             await db.commit()
         await ctx.send(f"Warn log channel set to {channel.mention}.", ephemeral=True)
 
+    @commands.hybrid_command(name="warn", description="[Admin] Issue a warning to a member")
+    @commands.has_permissions(administrator=True)
+    @app_commands.default_permissions(administrator=True)
+    @app_commands.describe(
+        member="The member to warn",
+        reason="Reason for the warning",
+        amount="Duration amount (e.g. 3) — leave blank for permanent",
+        unit="Duration unit — leave blank for permanent",
+        strike_reason="Reason for the strike if this warn triggers one (defaults to warn reason)",
+    )
+    async def warn(
+        self,
+        ctx: commands.Context,
+        member: discord.Member,
+        reason: str,
+        amount: Optional[int] = None,
+        unit: Optional[Literal["hours", "days", "weeks"]] = None,
+        strike_reason: Optional[str] = None,
+    ):
+        log_channel = await self._get_log_channel(ctx.guild)
+        if not log_channel:
+            return await ctx.send("No warn log channel set. Use `/setwarnlog` first.", ephemeral=True)
+
+        expires_at = _parse_expires_at(amount, unit) if (amount and unit) else None
+        now = datetime.now(timezone.utc).isoformat()
+        old_count = await self._get_active_warn_count(ctx.guild.id, member.id)
+
+        async with aiosqlite.connect(DB_PATH) as db:
+            cursor = await db.execute(
+                """INSERT INTO warnings (guild_id, user_id, reason, issued_by, issued_at, expires_at)
+                   VALUES (?, ?, ?, ?, ?, ?)""",
+                (ctx.guild.id, member.id, reason, ctx.author.id, now, expires_at),
+            )
+            warn_id = cursor.lastrowid
+            await db.commit()
+
+        new_count = old_count + 1
+        strike_num = _threshold_crossed(old_count, new_count)
+
+        if strike_num:
+            effective_reason = strike_reason or reason
+            async with aiosqlite.connect(DB_PATH) as db:
+                await db.execute(
+                    """INSERT INTO strikes
+                       (guild_id, user_id, strike_number, reason, issued_by, issued_at, triggering_warn_id)
+                       VALUES (?, ?, ?, ?, ?, ?, ?)""",
+                    (ctx.guild.id, member.id, strike_num, effective_reason, ctx.author.id, now, warn_id),
+                )
+                await db.commit()
+            embed = self._strike_embed(ctx.guild, member, strike_num, new_count, effective_reason, expires_at, ctx.author)
+            label = f"Strike #{strike_num}"
+        else:
+            embed = self._warn_embed(ctx.guild, member, new_count, reason, expires_at, ctx.author)
+            label = f"Warning #{new_count}"
+
+        await self._post_embed(log_channel, embed)
+        await ctx.send(f"{label} issued for {member.mention}.", ephemeral=True)
+
 
 async def setup(bot: commands.Bot):
     await bot.add_cog(Warnings(bot))
