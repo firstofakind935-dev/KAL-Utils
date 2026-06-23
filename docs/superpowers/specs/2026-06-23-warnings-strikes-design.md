@@ -15,7 +15,7 @@ All commands require `administrator` permission.
 |---|---|---|
 | `/warn` | `@member`, `reason`, `[amount]`, `[unit]` | Issues a warning. Duration is optional (amount + unit e.g. `3 days`, `1 hour`, `2 weeks`). If omitted, warning is permanent. |
 | `/removewarn` | `@member`, `warn_id` | Removes one specific warning by its ID. |
-| `/removestrike` | `@member` | Removes the most recent warning that caused a strike threshold to be crossed, effectively dropping the member back one strike level. |
+| `/removestrike` | `@member`, `strike_id` | Lists the member's strikes (with ID, reason, date) and removes the one matching the given ID. |
 | `/clearstrikes` | `@member` | Clears all warnings and strikes for a member. |
 | `/warnings` | `@member` | Shows the member's full warn/strike history (active and expired). |
 | `/setwarnlog` | `#channel` | One-time setup — sets the channel where warn/strike embeds are posted. |
@@ -62,6 +62,20 @@ One row per warning issued.
 | `issued_at` | TEXT | ISO 8601 timestamp |
 | `expires_at` | TEXT (nullable) | NULL = permanent; ISO 8601 if timed |
 
+### `strikes` table
+One row per strike issued. Strikes are created when a warn pushes the active warn count to a threshold (3, 6, or 8).
+
+| Column | Type | Notes |
+|---|---|---|
+| `id` | INTEGER PRIMARY KEY AUTOINCREMENT | Used by `/removestrike` |
+| `guild_id` | INTEGER | |
+| `user_id` | INTEGER | The struck member |
+| `strike_number` | INTEGER | 1, 2, or 3 |
+| `reason` | TEXT | Admin-written reason for this strike (defaults to triggering warn reason if not provided) |
+| `issued_by` | INTEGER | Admin user ID |
+| `issued_at` | TEXT | ISO 8601 timestamp |
+| `triggering_warn_id` | INTEGER | ID of the warn that pushed the threshold |
+
 Tables are created in `cog_load` (same pattern as `security.py`).
 
 ---
@@ -73,7 +87,10 @@ Runs whenever a warn is issued or `/warnings` is viewed:
 1. Fetch all warning rows for `(guild_id, user_id)`.
 2. Filter to active: `expires_at IS NULL OR expires_at > now`.
 3. Count active warns → map to strike level per threshold table above.
-4. If the new warn pushed the count to exactly 3, 6, or 8 — the posted embed switches to a Strike embed instead of a Warn embed.
+4. If the new warn pushed the count to exactly 3, 6, or 8:
+   - Bot prompts the admin for a strike reason (optional — defaults to the triggering warn reason).
+   - A new row is inserted into the `strikes` table.
+   - The posted embed switches to a Strike embed instead of a Warn embed.
 
 ---
 
@@ -135,5 +152,6 @@ Colour: **green** (`0x2ECC71`)
 
 - If no log channel is configured, commands respond ephemerally: _"No warn log channel set. Use `/setwarnlog` first."_
 - If `warn_id` doesn't exist or belongs to a different guild, respond ephemerally: _"Warning not found."_
-- If `/removestrike` is used on a member with fewer than 3 active warns (no strike yet), respond ephemerally: _"This member has no strikes to remove."_
+- If `/removestrike` is used on a member with no strike records, respond ephemerally: _"This member has no strikes to remove."_
+- If the given `strike_id` doesn't belong to that member in that guild, respond ephemerally: _"Strike not found for this member."_
 - Bot missing permissions to send in the log channel → ephemeral error to the admin.
