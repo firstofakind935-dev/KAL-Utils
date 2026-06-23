@@ -406,6 +406,29 @@ class Warnings(commands.Cog):
 
         await ctx.send(f"Strike `{strike_id}` removed for {member.mention}.", ephemeral=True)
 
+    @commands.hybrid_command(name="clearstrikes", description="[Admin] Clear all warnings and strikes for a member")
+    @commands.has_permissions(administrator=True)
+    @app_commands.default_permissions(administrator=True)
+    @app_commands.describe(member="The member to clear")
+    async def clearstrikes(self, ctx: commands.Context, member: discord.Member):
+        async with aiosqlite.connect(DB_PATH) as db:
+            await db.execute(
+                "DELETE FROM warnings WHERE guild_id = ? AND user_id = ?",
+                (ctx.guild.id, member.id),
+            )
+            await db.execute(
+                "DELETE FROM strikes WHERE guild_id = ? AND user_id = ?",
+                (ctx.guild.id, member.id),
+            )
+            await db.commit()
+
+        log_channel = await self._get_log_channel(ctx.guild)
+        if log_channel:
+            embed = self._removal_embed(ctx.guild, member, "All Warnings & Strikes Cleared", ctx.author)
+            await self._post_embed(log_channel, embed)
+
+        await ctx.send(f"All warnings and strikes cleared for {member.mention}.", ephemeral=True)
+
 
 async def setup(bot: commands.Bot):
     await bot.add_cog(Warnings(bot))
