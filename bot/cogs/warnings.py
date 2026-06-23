@@ -1,3 +1,4 @@
+from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Optional, Literal
 
@@ -36,6 +37,14 @@ def _parse_expires_at(amount: int, unit: str) -> Optional[str]:
         return None
     dt = datetime.now(timezone.utc) + timedelta(seconds=amount * seconds)
     return dt.isoformat()
+
+
+@dataclass
+class _Emojis:
+    exclamation: object
+    user: object
+    badge: object
+    arrow: object
 
 
 class Warnings(commands.Cog):
@@ -112,6 +121,14 @@ class Warnings(commands.Cog):
         except (discord.Forbidden, discord.HTTPException):
             pass
 
+    def _get_emojis(self, guild: discord.Guild) -> "_Emojis":
+        return _Emojis(
+            exclamation=discord.utils.get(guild.emojis, name="KE_Exclamation"),
+            user=discord.utils.get(guild.emojis, name="KE_User"),
+            badge=discord.utils.get(guild.emojis, name="KE_Badge"),
+            arrow=discord.utils.get(guild.emojis, name="KE_Arrow"),
+        )
+
     def _warn_embed(
         self,
         guild: discord.Guild,
@@ -121,10 +138,7 @@ class Warnings(commands.Cog):
         expires_at: Optional[str],
         issued_by: discord.Member,
     ) -> discord.Embed:
-        ex = discord.utils.get(guild.emojis, name="KE_Exclamation")
-        eu = discord.utils.get(guild.emojis, name="KE_User")
-        eb = discord.utils.get(guild.emojis, name="KE_Badge")
-        ea = discord.utils.get(guild.emojis, name="KE_Arrow")
+        e = self._get_emojis(guild)
 
         top_role = next((r for r in reversed(member.roles) if r.name != "@everyone"), None)
         position = top_role.mention if top_role else "No role"
@@ -136,13 +150,13 @@ class Warnings(commands.Cog):
             expires_str = "Permanent"
 
         embed = discord.Embed(
-            title=f"{ex or '⚠️'} Warning #{warn_num}",
+            title=f"{e.exclamation or '⚠️'} Warning #{warn_num}",
             color=0xF1C40F,
             timestamp=datetime.now(timezone.utc),
         )
-        embed.add_field(name=f"{eu or ''} User", value=member.mention, inline=False)
-        embed.add_field(name=f"{eb or ''} Position", value=position, inline=False)
-        embed.add_field(name=f"{ea or ''} Reason", value=reason, inline=False)
+        embed.add_field(name=f"{e.user} User" if e.user else "User", value=member.mention, inline=False)
+        embed.add_field(name=f"{e.badge} Position" if e.badge else "Position", value=position, inline=False)
+        embed.add_field(name=f"{e.arrow} Reason" if e.arrow else "Reason", value=reason, inline=False)
         embed.add_field(name="Expires", value=expires_str, inline=True)
         embed.add_field(name="Issued by", value=issued_by.mention, inline=True)
         embed.set_thumbnail(url=member.display_avatar.url)
@@ -158,10 +172,7 @@ class Warnings(commands.Cog):
         expires_at: Optional[str],
         issued_by: discord.Member,
     ) -> discord.Embed:
-        ex = discord.utils.get(guild.emojis, name="KE_Exclamation")
-        eu = discord.utils.get(guild.emojis, name="KE_User")
-        eb = discord.utils.get(guild.emojis, name="KE_Badge")
-        ea = discord.utils.get(guild.emojis, name="KE_Arrow")
+        e = self._get_emojis(guild)
 
         top_role = next((r for r in reversed(member.roles) if r.name != "@everyone"), None)
         position = top_role.mention if top_role else "No role"
@@ -175,13 +186,13 @@ class Warnings(commands.Cog):
             expires_str = "Permanent"
 
         embed = discord.Embed(
-            title=f"{ex or '🚨'} Strike #{strike_num}",
+            title=f"{e.exclamation or '🚨'} Strike #{strike_num}",
             color=color,
             timestamp=datetime.now(timezone.utc),
         )
-        embed.add_field(name=f"{eu or ''} User", value=member.mention, inline=False)
-        embed.add_field(name=f"{eb or ''} Position", value=position, inline=False)
-        embed.add_field(name=f"{ea or ''} Reason", value=reason, inline=False)
+        embed.add_field(name=f"{e.user} User" if e.user else "User", value=member.mention, inline=False)
+        embed.add_field(name=f"{e.badge} Position" if e.badge else "Position", value=position, inline=False)
+        embed.add_field(name=f"{e.arrow} Reason" if e.arrow else "Reason", value=reason, inline=False)
         embed.add_field(name="Active Warnings", value=str(warn_count), inline=True)
         embed.add_field(name="Expires", value=expires_str, inline=True)
         embed.add_field(name="Issued by", value=issued_by.mention, inline=True)
@@ -201,17 +212,16 @@ class Warnings(commands.Cog):
         action: str,
         issued_by: discord.Member,
     ) -> discord.Embed:
-        ex = discord.utils.get(guild.emojis, name="KE_Exclamation")
-        eu = discord.utils.get(guild.emojis, name="KE_User")
-        ea = discord.utils.get(guild.emojis, name="KE_Arrow")
+        e = self._get_emojis(guild)
+        check = discord.utils.get(guild.emojis, name="KE_Check")
 
         embed = discord.Embed(
-            title=f"{ex or '✅'} {action}",
+            title=f"{check or '✅'} {action}",
             color=0x2ECC71,
             timestamp=datetime.now(timezone.utc),
         )
-        embed.add_field(name=f"{eu or ''} User", value=member.mention, inline=False)
-        embed.add_field(name=f"{ea or ''} Action by", value=issued_by.mention, inline=False)
+        embed.add_field(name=f"{e.user} User" if e.user else "User", value=member.mention, inline=False)
+        embed.add_field(name=f"{e.arrow} Action by" if e.arrow else "Action by", value=issued_by.mention, inline=False)
         embed.set_thumbnail(url=member.display_avatar.url)
         return embed
 
