@@ -263,9 +263,14 @@ class Warnings(commands.Cog):
         if not log_channel:
             return await ctx.send("No warn log channel set. Use `/setwarnlog` first.", ephemeral=True)
 
+        if bool(amount) != bool(unit):
+            return await ctx.send("Provide both `amount` and `unit`, or neither (for permanent).", ephemeral=True)
+
         expires_at = _parse_expires_at(amount, unit) if (amount and unit) else None
         now = datetime.now(timezone.utc).isoformat()
         old_count = await self._get_active_warn_count(ctx.guild.id, member.id)
+        new_count = old_count + 1
+        strike_num = _threshold_crossed(old_count, new_count)
 
         async with aiosqlite.connect(DB_PATH) as db:
             cursor = await db.execute(
@@ -274,21 +279,20 @@ class Warnings(commands.Cog):
                 (ctx.guild.id, member.id, reason, ctx.author.id, now, expires_at),
             )
             warn_id = cursor.lastrowid
-            await db.commit()
 
-        new_count = old_count + 1
-        strike_num = _threshold_crossed(old_count, new_count)
-
-        if strike_num:
-            effective_reason = strike_reason or reason
-            async with aiosqlite.connect(DB_PATH) as db:
+            if strike_num:
+                effective_reason = strike_reason or reason
                 await db.execute(
                     """INSERT INTO strikes
                        (guild_id, user_id, strike_number, reason, issued_by, issued_at, triggering_warn_id)
                        VALUES (?, ?, ?, ?, ?, ?, ?)""",
                     (ctx.guild.id, member.id, strike_num, effective_reason, ctx.author.id, now, warn_id),
                 )
-                await db.commit()
+
+            await db.commit()
+
+        if strike_num:
+            effective_reason = strike_reason or reason
             embed = self._strike_embed(ctx.guild, member, strike_num, new_count, effective_reason, expires_at, ctx.author)
             label = f"Strike #{strike_num}"
         else:
