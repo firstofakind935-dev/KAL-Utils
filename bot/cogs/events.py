@@ -7,7 +7,7 @@ from discord.ext import commands, tasks
 
 from db.database import DB_PATH
 
-DEFAULT_REMINDER_MINUTES = 30
+DEFAULT_REMINDER_MINUTES = 60
 
 FORMATS = [
     "%d/%m/%Y %H:%M",
@@ -130,25 +130,31 @@ class Events(commands.Cog):
 
         minutes_away = int((event.start_time - datetime.now(timezone.utc)).total_seconds() / 60)
         time_label = f"{minutes_away} minute{'s' if minutes_away != 1 else ''}"
+        event_url = f"https://discord.com/events/{guild.id}/{event.id}"
 
         embed = discord.Embed(
-            title="✈️ Event Starting Soon",
-            description=f"**{event.name}** in **{guild.name}** starts in **{time_label}**!",
+            title="✈️ Boarding Call — All Passengers Please Proceed",
+            description=(
+                f"This is your boarding call for **{event.name}**.\n\n"
+                f"Departure is in **{time_label}**. "
+                f"Please make your way to the gate now.\n\n"
+                f"[**→ Join the event**]({event_url})"
+            ),
             color=discord.Color(0x00A4E4),
             timestamp=event.start_time,
         )
         embed.add_field(
-            name="Start Time",
+            name="Departure",
             value=f"<t:{int(event.start_time.timestamp())}:F>",
             inline=True,
         )
         if event.location:
-            embed.add_field(name="Location", value=event.location, inline=True)
+            embed.add_field(name="Gate", value=event.location, inline=True)
         elif event.channel:
-            embed.add_field(name="Channel", value=event.channel.name, inline=True)
+            embed.add_field(name="Gate", value=event.channel.name, inline=True)
         if event.description:
-            embed.add_field(name="Details", value=event.description[:500], inline=False)
-        embed.set_footer(text="You're receiving this because you marked yourself as interested.")
+            embed.add_field(name="Flight Details", value=event.description[:500], inline=False)
+        embed.set_footer(text="Korean Air PTFS • You're receiving this because you marked yourself as interested.")
 
         sent = 0
         failed = 0
@@ -287,7 +293,7 @@ class Events(commands.Cog):
 
         if len(upcoming) > 10:
             embed.set_footer(text=f"Showing 10 of {len(upcoming)} events")
-        embed.set_footer(text=f"Reminders sent {reminder_minutes} min before start")
+        embed.set_footer(text=f"Boarding calls sent {reminder_minutes} min before departure")
 
         await ctx.send(embed=embed)
 
