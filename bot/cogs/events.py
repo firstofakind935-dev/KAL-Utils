@@ -35,6 +35,143 @@ def parse_when(when: str) -> datetime:
     raise ValueError(f"Could not parse: {when}")
 
 
+class CreateEventModal(discord.ui.Modal, title="✈️ Create New Flight Event"):
+    event_name = discord.ui.TextInput(
+        label="Flight Name",
+        placeholder="e.g. KE3348",
+        max_length=100,
+    )
+    when = discord.ui.TextInput(
+        label="Date & Time (UTC)",
+        placeholder="e.g. 25/12/2026 20:00  or  2026-12-25 20:00",
+        max_length=25,
+    )
+    route = discord.ui.TextInput(
+        label="Route  (Departure → Arrival)",
+        placeholder="e.g. ICN → LAX",
+        required=False,
+        max_length=200,
+    )
+    flight_info = discord.ui.TextInput(
+        label="Flight Time  |  Cabin Classes",
+        placeholder="e.g. 10h 30m | First · Prestige · Economy",
+        required=False,
+        max_length=200,
+    )
+    server_link = discord.ui.TextInput(
+        label="Server Link (sent at departure)",
+        placeholder="https://www.roblox.com/share?code=...",
+        required=False,
+        max_length=500,
+    )
+
+    def __init__(self, gate: AnyVoiceChannel, duration: int):
+        super().__init__()
+        self.gate = gate
+        self.duration = duration
+
+    async def on_submit(self, interaction: discord.Interaction):
+        await interaction.response.defer(ephemeral=True)
+
+        try:
+            start = parse_when(self.when.value)
+        except ValueError:
+            return await interaction.followup.send(
+                'Invalid date/time. Examples: `25/12 20:00` · `25/12/2026 20:00` · `2026-12-25 20:00`',
+                ephemeral=True,
+            )
+
+        if start < datetime.now(timezone.utc):
+            return await interaction.followup.send("Start time must be in the future.", ephemeral=True)
+
+        end = start + timedelta(minutes=self.duration)
+
+        departure = arrival = None
+        if self.route.value.strip():
+            parts = self.route.value.split("→", 1)
+            if len(parts) == 2:
+                departure, arrival = parts[0].strip(), parts[1].strip()
+            else:
+                departure = self.route.value.strip()
+
+        flight_time = cabin_classes = None
+        if self.flight_info.value.strip():
+            parts = self.flight_info.value.split("|", 1)
+            flight_time = parts[0].strip() or None
+            cabin_classes = parts[1].strip() if len(parts) > 1 and parts[1].strip() else None
+
+        server_link = self.server_link.value.strip() or None
+
+        desc_parts = []
+        if departure and arrival:
+            desc_parts.append(f"✈️ {departure} → {arrival}")
+        elif departure:
+            desc_parts.append(f"✈️ {departure}")
+        if flight_time:
+            desc_parts.append(f"🕐 Flight time: {flight_time}")
+        if cabin_classes:
+            desc_parts.append(f"💺 Cabins: {cabin_classes}")
+        desc_parts.append("🚪 Gate announced 60 minutes before departure.")
+        description = "\n".join(desc_parts)
+
+        guild = interaction.guild
+
+        try:
+            data = await interaction.client.http.create_guild_scheduled_event(
+                guild.id,
+                name=self.event_name.value,
+                privacy_level=2,
+                scheduled_start_time=start.isoformat(),
+                scheduled_end_time=end.isoformat(),
+                entity_type=3,
+                entity_metadata={"location": f"{departure} → {arrival}" if (departure and arrival) else "See event details"},
+                description=description,
+            )
+        except discord.Forbidden:
+            return await interaction.followup.send("I don't have permission to create events.", ephemeral=True)
+        except Exception as e:
+            return await interaction.followup.send(f"Failed to create event: `{e}`", ephemeral=True)
+
+        event_id = str(data["id"])
+
+        async with aiosqlite.connect(DB_PATH) as db:
+            await db.execute(
+                """INSERT INTO event_details
+                   (event_id, guild_id, gate_channel_id, departure, arrival, flight_time, cabin_classes, server_link)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+                (event_id, guild.id, self.gate.id, departure, arrival, flight_time, cabin_classes, server_link),
+            )
+            await db.commit()
+
+        embed = discord.Embed(
+            title="✅ Event Created",
+            description=f"**{data['name']}**",
+            color=discord.Color(0x00A4E4),
+        )
+        embed.add_field(name="Departure", value=f"<t:{int(start.timestamp())}:F>", inline=True)
+        embed.add_field(name="Duration", value=f"{self.duration} min", inline=True)
+        embed.add_field(name="Gate (hidden)", value=self.gate.mention, inline=True)
+        if departure and arrival:
+            embed.add_field(name="Route", value=f"{departure} → {arrival}", inline=False)
+        if flight_time:
+            embed.add_field(name="Flight Time", value=flight_time, inline=True)
+        if cabin_classes:
+            embed.add_field(name="Cabin Classes", value=cabin_classes, inline=True)
+        if server_link:
+            embed.add_field(name="Server Link (sent at boarding)", value=server_link, inline=False)
+        embed.set_footer(text="Gate announced 60 min before · Server link sent at departure time.")
+
+        await interaction.followup.send(embed=embed, ephemeral=True)
+
+    async def on_error(self, interaction: discord.Interaction, error: Exception):
+        print(f"[Events] CreateEventModal error: {error}")
+        msg = "Something went wrong creating the event. Please try again."
+        if not interaction.response.is_done():
+            await interaction.response.send_message(msg, ephemeral=True)
+        else:
+            await interaction.followup.send(msg, ephemeral=True)
+
+
 class Events(commands.Cog):
     def __init__(self, bot: commands.Bot):
         self.bot = bot
@@ -367,14 +504,7 @@ class Events(commands.Cog):
 
     @commands.hybrid_command(name="createevent", description="Create a new scheduled event in this server")
     @app_commands.describe(
-        name="Event name",
-        when='Date and time in UTC — e.g. "25/12 20:00" or "25/12/2026 20:00"',
         gate="Voice or stage channel — kept secret until 60 min before departure",
-        departure="Departure location (e.g. ICN — Seoul Incheon)",
-        arrival="Arrival location (e.g. LAX — Los Angeles)",
-        flight_time="Estimated flight time (e.g. 10h 30m)",
-        cabin_classes="Available cabin classes (e.g. First · Prestige · Economy)",
-        server_link="Server link sent to interested members at event start (e.g. Roblox private server link)",
         duration="Duration in minutes (default: 60)",
     )
     @commands.has_permissions(administrator=True)
@@ -382,88 +512,12 @@ class Events(commands.Cog):
     async def createevent(
         self,
         ctx: commands.Context,
-        name: str,
-        when: str,
         gate: AnyVoiceChannel,
-        departure: Optional[str] = None,
-        arrival: Optional[str] = None,
-        flight_time: Optional[str] = None,
-        cabin_classes: Optional[str] = None,
-        server_link: Optional[str] = None,
         duration: int = 60,
     ):
-        await ctx.defer(ephemeral=True)
-
-        try:
-            start = parse_when(when)
-        except ValueError:
-            return await ctx.send(
-                'Invalid date/time. Examples: `25/12 20:00` · `25/12/2026 20:00` · `2026-12-25 20:00`',
-                ephemeral=True,
-            )
-
-        if start < datetime.now(timezone.utc):
-            return await ctx.send("Start time must be in the future.", ephemeral=True)
-
-        end = start + timedelta(minutes=duration)
-
-        # Build description from flight details — gate is NOT included here
-        desc_parts = []
-        if departure and arrival:
-            desc_parts.append(f"✈️ {departure} → {arrival}")
-        if flight_time:
-            desc_parts.append(f"🕐 Flight time: {flight_time}")
-        if cabin_classes:
-            desc_parts.append(f"💺 Cabins: {cabin_classes}")
-        desc_parts.append("🚪 Gate announced 60 minutes before departure.")
-        description = "\n".join(desc_parts)
-
-        try:
-            data = await ctx.bot.http.create_guild_scheduled_event(
-                ctx.guild.id,
-                name=name,
-                privacy_level=2,
-                scheduled_start_time=start.isoformat(),
-                scheduled_end_time=end.isoformat(),
-                entity_type=3,
-                entity_metadata={"location": f"{departure} → {arrival}" if (departure and arrival) else "See event details"},
-                description=description,
-            )
-        except discord.Forbidden:
-            return await ctx.send("I don't have permission to create events.", ephemeral=True)
-        except Exception as e:
-            return await ctx.send(f"Failed to create event: `{e}`", ephemeral=True)
-
-        event_id = str(data["id"])
-
-        async with aiosqlite.connect(DB_PATH) as db:
-            await db.execute(
-                """INSERT INTO event_details
-                   (event_id, guild_id, gate_channel_id, departure, arrival, flight_time, cabin_classes, server_link)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
-                (event_id, ctx.guild.id, gate.id, departure, arrival, flight_time, cabin_classes, server_link),
-            )
-            await db.commit()
-
-        embed = discord.Embed(
-            title="✅ Event Created",
-            description=f"**{data['name']}**",
-            color=discord.Color(0x00A4E4),
-        )
-        embed.add_field(name="Departure", value=f"<t:{int(start.timestamp())}:F>", inline=True)
-        embed.add_field(name="Duration", value=f"{duration} min", inline=True)
-        embed.add_field(name="Gate (hidden)", value=gate.mention, inline=True)
-        if departure and arrival:
-            embed.add_field(name="Route", value=f"{departure} → {arrival}", inline=False)
-        if flight_time:
-            embed.add_field(name="Flight Time", value=flight_time, inline=True)
-        if cabin_classes:
-            embed.add_field(name="Cabin Classes", value=cabin_classes, inline=True)
-        if server_link:
-            embed.add_field(name="Server Link (sent at boarding)", value=server_link, inline=False)
-        embed.set_footer(text="Gate announced 60 min before · Server link sent at departure time.")
-
-        await ctx.send(embed=embed, ephemeral=True)
+        if ctx.interaction is None:
+            return await ctx.send("Please use this as a slash command: `/createevent`")
+        await ctx.interaction.response.send_modal(CreateEventModal(gate=gate, duration=duration))
 
     @commands.hybrid_command(
         name="testeventreminder",
