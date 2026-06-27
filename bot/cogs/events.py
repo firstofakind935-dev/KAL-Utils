@@ -304,6 +304,39 @@ class Events(commands.Cog):
 
         await ctx.send(embed=embed, ephemeral=True)
 
+    @commands.hybrid_command(
+        name="testeventreminder",
+        description="[Admin] Send a test gate assignment DM to yourself",
+    )
+    @commands.has_permissions(administrator=True)
+    @app_commands.default_permissions(administrator=True)
+    async def testeventreminder(self, ctx: commands.Context):
+        event_url = f"https://discord.com/events/{ctx.guild.id}/000000000000000000"
+
+        embed = discord.Embed(
+            title="✈️ Gate Assignment — Your Gate Is Now Confirmed",
+            description=(
+                f"Your gate for **TEST FLIGHT KE001** has been assigned.\n\n"
+                f"Departure is in **60 minutes**. "
+                f"Please join your gate at departure time.\n\n"
+                f"[**→ View event**]({event_url})"
+            ),
+            color=discord.Color(0x00A4E4),
+            timestamp=datetime.now(timezone.utc),
+        )
+        embed.add_field(name="Departure Time", value=f"<t:{int(datetime.now(timezone.utc).timestamp()) + 3600}:F>", inline=True)
+        embed.add_field(name="Gate", value="#gate-1 (test)", inline=True)
+        embed.add_field(name="Route", value="ICN → LAX", inline=False)
+        embed.add_field(name="Flight Time", value="10h 30m", inline=True)
+        embed.add_field(name="Cabin Classes", value="First · Prestige · Economy", inline=True)
+        embed.set_footer(text="Korean Air PTFS • You're receiving this because you marked yourself as interested.")
+
+        try:
+            await ctx.author.send(embed=embed)
+            await ctx.send("✅ Test gate assignment DM sent — check your DMs.", ephemeral=True)
+        except discord.Forbidden:
+            await ctx.send("❌ Couldn't DM you. Enable DMs from server members and try again.", ephemeral=True)
+
     @commands.hybrid_command(name="events", description="List all upcoming scheduled events in this server")
     async def events(self, ctx: commands.Context):
         await ctx.defer()
