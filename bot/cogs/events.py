@@ -1,9 +1,13 @@
 from datetime import datetime, timedelta, timezone
 
+import aiosqlite
 import discord
 from discord import app_commands
-from discord.ext import commands
+from discord.ext import commands, tasks
 
+from db.database import DB_PATH
+
+DEFAULT_REMINDER_MINUTES = 30
 
 FORMATS = [
     "%d/%m/%Y %H:%M",
@@ -31,6 +35,162 @@ def parse_when(when: str) -> datetime:
 class Events(commands.Cog):
     def __init__(self, bot: commands.Bot):
         self.bot = bot
+
+    async def cog_load(self):
+        async with aiosqlite.connect(DB_PATH) as db:
+            await db.execute("""
+                CREATE TABLE IF NOT EXISTS event_reminder_config (
+                    guild_id         INTEGER PRIMARY KEY,
+                    reminder_minutes INTEGER NOT NULL DEFAULT 30
+                )
+            """)
+            await db.execute("""
+                CREATE TABLE IF NOT EXISTS event_reminders_sent (
+                    guild_id  INTEGER NOT NULL,
+                    event_id  TEXT    NOT NULL,
+                    PRIMARY KEY (guild_id, event_id)
+                )
+            """)
+            await db.commit()
+        self._reminder_loop.start()
+
+    async def cog_unload(self):
+        self._reminder_loop.cancel()
+
+    # ── DB helpers ───────────────────────────────────────────────────────────
+
+    async def _get_reminder_minutes(self, guild_id: int) -> int:
+        async with aiosqlite.connect(DB_PATH) as db:
+            async with db.execute(
+                "SELECT reminder_minutes FROM event_reminder_config WHERE guild_id = ?",
+                (guild_id,),
+            ) as cur:
+                row = await cur.fetchone()
+        return row[0] if row else DEFAULT_REMINDER_MINUTES
+
+    async def _already_reminded(self, guild_id: int, event_id: str) -> bool:
+        async with aiosqlite.connect(DB_PATH) as db:
+            async with db.execute(
+                "SELECT 1 FROM event_reminders_sent WHERE guild_id = ? AND event_id = ?",
+                (guild_id, event_id),
+            ) as cur:
+                return await cur.fetchone() is not None
+
+    async def _mark_reminded(self, guild_id: int, event_id: str):
+        async with aiosqlite.connect(DB_PATH) as db:
+            await db.execute(
+                "INSERT OR IGNORE INTO event_reminders_sent (guild_id, event_id) VALUES (?, ?)",
+                (guild_id, event_id),
+            )
+            await db.commit()
+
+    # ── Reminder task ─────────────────────────────────────────────────────────
+
+    @tasks.loop(minutes=5)
+    async def _reminder_loop(self):
+        for guild in self.bot.guilds:
+            try:
+                await self._check_guild_events(guild)
+            except Exception as e:
+                print(f"[Events] Reminder check failed for {guild.name}: {e}")
+
+    @_reminder_loop.before_loop
+    async def _before_reminder_loop(self):
+        await self.bot.wait_until_ready()
+
+    async def _check_guild_events(self, guild: discord.Guild):
+        reminder_minutes = await self._get_reminder_minutes(guild.id)
+        now = datetime.now(timezone.utc)
+        window_end = now + timedelta(minutes=reminder_minutes)
+
+        events = await guild.fetch_scheduled_events()
+        for event in events:
+            if event.status != discord.ScheduledEventStatus.scheduled:
+                continue
+            if not (now < event.start_time <= window_end):
+                continue
+            if await self._already_reminded(guild.id, str(event.id)):
+                continue
+
+            # Mark before sending to prevent duplicate runs if the loop fires twice
+            await self._mark_reminded(guild.id, str(event.id))
+            await self._send_reminders(guild, event, reminder_minutes)
+
+    async def _send_reminders(self, guild: discord.Guild, event: discord.ScheduledEvent, reminder_minutes: int):
+        try:
+            data = await self.bot.http.get_scheduled_event_users(
+                guild.id, event.id, limit=100, with_member=False,
+            )
+        except Exception as e:
+            print(f"[Events] Could not fetch subscribers for '{event.name}': {e}")
+            return
+
+        if not data:
+            return
+
+        minutes_away = int((event.start_time - datetime.now(timezone.utc)).total_seconds() / 60)
+        time_label = f"{minutes_away} minute{'s' if minutes_away != 1 else ''}"
+
+        embed = discord.Embed(
+            title="✈️ Event Starting Soon",
+            description=f"**{event.name}** in **{guild.name}** starts in **{time_label}**!",
+            color=discord.Color(0x00A4E4),
+            timestamp=event.start_time,
+        )
+        embed.add_field(
+            name="Start Time",
+            value=f"<t:{int(event.start_time.timestamp())}:F>",
+            inline=True,
+        )
+        if event.location:
+            embed.add_field(name="Location", value=event.location, inline=True)
+        elif event.channel:
+            embed.add_field(name="Channel", value=event.channel.name, inline=True)
+        if event.description:
+            embed.add_field(name="Details", value=event.description[:500], inline=False)
+        embed.set_footer(text="You're receiving this because you marked yourself as interested.")
+
+        sent = 0
+        failed = 0
+        for entry in data:
+            user_data = entry.get("user") or entry
+            user_id = int(user_data["id"])
+            try:
+                user = await self.bot.fetch_user(user_id)
+                await user.send(embed=embed)
+                sent += 1
+            except Exception:
+                failed += 1
+
+        print(f"[Events] Reminder for '{event.name}' in {guild.name}: {sent} sent, {failed} failed")
+
+    # ── Commands ──────────────────────────────────────────────────────────────
+
+    @commands.hybrid_command(
+        name="seteventreminder",
+        description="[Admin] Set how many minutes before an event to DM interested members",
+    )
+    @app_commands.describe(minutes="Minutes before the event to send the reminder (e.g. 30, 60)")
+    @commands.has_permissions(administrator=True)
+    @app_commands.default_permissions(administrator=True)
+    async def seteventreminder(self, ctx: commands.Context, minutes: int):
+        if minutes < 5:
+            return await ctx.send("Minimum reminder time is 5 minutes.", ephemeral=True)
+        if minutes > 1440:
+            return await ctx.send("Maximum reminder time is 1440 minutes (24 hours).", ephemeral=True)
+
+        async with aiosqlite.connect(DB_PATH) as db:
+            await db.execute(
+                """INSERT INTO event_reminder_config (guild_id, reminder_minutes) VALUES (?, ?)
+                   ON CONFLICT(guild_id) DO UPDATE SET reminder_minutes = excluded.reminder_minutes""",
+                (ctx.guild.id, minutes),
+            )
+            await db.commit()
+
+        await ctx.send(
+            f"Event reminders will be sent **{minutes} minute{'s' if minutes != 1 else ''}** before each event starts.",
+            ephemeral=True,
+        )
 
     @commands.hybrid_command(name="createevent", description="Create a new scheduled event in this server")
     @app_commands.describe(
@@ -99,6 +259,8 @@ class Events(commands.Cog):
         if not upcoming:
             return await ctx.send("No upcoming events scheduled.")
 
+        reminder_minutes = await self._get_reminder_minutes(ctx.guild.id)
+
         embed = discord.Embed(
             title=f"📅 Upcoming Events — {ctx.guild.name}",
             color=discord.Color(0x00A4E4),
@@ -125,6 +287,7 @@ class Events(commands.Cog):
 
         if len(upcoming) > 10:
             embed.set_footer(text=f"Showing 10 of {len(upcoming)} events")
+        embed.set_footer(text=f"Reminders sent {reminder_minutes} min before start")
 
         await ctx.send(embed=embed)
 
