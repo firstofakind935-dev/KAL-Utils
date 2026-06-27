@@ -1,5 +1,6 @@
 from datetime import datetime, timedelta, timezone
 from typing import Optional, Union
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 import aiosqlite
 import discord
@@ -36,14 +37,21 @@ def parse_when(when: str) -> datetime:
 
 
 class CreateEventModal(discord.ui.Modal, title="✈️ Create New Flight Event"):
-    def __init__(self, channel: AnyVoiceChannel, duration: int, server_link: Optional[str]):
+    def __init__(
+        self,
+        channel: AnyVoiceChannel,
+        duration: int,
+        server_link: Optional[str],
+        tz: ZoneInfo,
+        tz_label: str,
+    ):
         super().__init__()
-        today = datetime.now(timezone.utc).strftime("%d/%m/%Y")
+        today = datetime.now(tz).strftime("%d/%m/%Y")
 
-        self.event_name = discord.ui.TextInput(label="Flight Name", placeholder="e.g. KE3348", max_length=100)
-        self.start_date = discord.ui.TextInput(label="Start Date (DD/MM/YYYY)", default=today, max_length=12)
-        self.start_time = discord.ui.TextInput(label="Start Time (UTC  —  HH:MM)", default="20:00", max_length=5)
-        self.gate_input = discord.ui.TextInput(label="In-Game Gate (revealed 60 min before)", placeholder="e.g. Terminal 1, Gate B3", required=False, max_length=100)
+        self.event_name  = discord.ui.TextInput(label="Flight Name", placeholder="e.g. KE3348", max_length=100)
+        self.start_date  = discord.ui.TextInput(label="Start Date (DD/MM/YYYY)", default=today, max_length=12)
+        self.start_time  = discord.ui.TextInput(label=f"Start Time ({tz_label}  —  HH:MM)", default="20:00", max_length=5)
+        self.gate_input  = discord.ui.TextInput(label="In-Game Gate (revealed 60 min before)", placeholder="e.g. Terminal 1, Gate B3", required=False, max_length=100)
         self.route_details = discord.ui.TextInput(label="Route & Details", placeholder="ICN → LAX | 10h 30m | First · Prestige · Economy", required=False, max_length=300)
 
         self.add_item(self.event_name)
@@ -52,20 +60,26 @@ class CreateEventModal(discord.ui.Modal, title="✈️ Create New Flight Event")
         self.add_item(self.gate_input)
         self.add_item(self.route_details)
 
-        self.channel = channel
-        self.duration = duration
+        self.channel      = channel
+        self.duration     = duration
         self._server_link = server_link
+        self._tz          = tz
+        self._tz_label    = tz_label
 
     async def on_submit(self, interaction: discord.Interaction):
         await interaction.response.defer(ephemeral=True)
 
+        date_str = self.start_date.value.strip()
+        time_str = self.start_time.value.strip()
         try:
-            start = parse_when(f"{self.start_date.value.strip()} {self.start_time.value.strip()}")
+            naive = datetime.strptime(f"{date_str} {time_str}", "%d/%m/%Y %H:%M")
         except ValueError:
             return await interaction.followup.send(
-                'Invalid date or time. Date example: `27/06/2026`. Time example: `20:00`',
+                f'Invalid date or time. Date: `27/06/2026`, Time: `20:00` ({self._tz_label})',
                 ephemeral=True,
             )
+
+        start = naive.replace(tzinfo=self._tz).astimezone(timezone.utc)
 
         if start < datetime.now(timezone.utc):
             return await interaction.followup.send("Start time must be in the future.", ephemeral=True)
@@ -206,9 +220,14 @@ class Events(commands.Cog):
                     guild_id            INTEGER PRIMARY KEY,
                     boarding_channel_id INTEGER,
                     boarding_role_id    INTEGER,
-                    support_channel_id  INTEGER
+                    support_channel_id  INTEGER,
+                    server_timezone     TEXT    DEFAULT 'UTC'
                 )
             """)
+            try:
+                await db.execute("ALTER TABLE guild_event_config ADD COLUMN server_timezone TEXT DEFAULT 'UTC'")
+            except Exception:
+                pass
             await db.commit()
         self._reminder_loop.start()
 
@@ -272,7 +291,7 @@ class Events(commands.Cog):
     async def _get_guild_event_config(self, guild_id: int) -> Optional[dict]:
         async with aiosqlite.connect(DB_PATH) as db:
             async with db.execute(
-                "SELECT boarding_channel_id, boarding_role_id, support_channel_id FROM guild_event_config WHERE guild_id = ?",
+                "SELECT boarding_channel_id, boarding_role_id, support_channel_id, server_timezone FROM guild_event_config WHERE guild_id = ?",
                 (guild_id,),
             ) as cur:
                 row = await cur.fetchone()
@@ -282,6 +301,7 @@ class Events(commands.Cog):
             "boarding_channel_id": row[0],
             "boarding_role_id":    row[1],
             "support_channel_id":  row[2],
+            "server_timezone":     row[3] or "UTC",
         }
 
     # ── Reminder task ─────────────────────────────────────────────────────────
@@ -496,6 +516,7 @@ class Events(commands.Cog):
     @app_commands.describe(
         channel="Voice or stage channel where pilots and hosts will speak",
         server_link="Roblox private server link (sent to interested members at departure)",
+        utc="Enter times in UTC instead of the server's configured timezone (default: False)",
         duration="Duration in minutes (default: 60)",
     )
     @commands.has_permissions(administrator=True)
@@ -505,12 +526,25 @@ class Events(commands.Cog):
         ctx: commands.Context,
         channel: AnyVoiceChannel,
         server_link: Optional[str] = None,
+        utc: bool = False,
         duration: int = 60,
     ):
         if ctx.interaction is None:
             return await ctx.send("Please use this as a slash command: `/createevent`")
+
+        config = await self._get_guild_event_config(ctx.guild.id)
+        tz_str = "UTC" if utc else (config or {}).get("server_timezone", "UTC") or "UTC"
+
+        try:
+            tz = ZoneInfo(tz_str)
+        except (ZoneInfoNotFoundError, KeyError):
+            tz = ZoneInfo("UTC")
+            tz_str = "UTC"
+
+        tz_label = datetime.now(tz).strftime("%Z") if tz_str != "UTC" else "UTC"
+
         await ctx.interaction.response.send_modal(
-            CreateEventModal(channel=channel, duration=duration, server_link=server_link)
+            CreateEventModal(channel=channel, duration=duration, server_link=server_link, tz=tz, tz_label=tz_label)
         )
 
     @commands.hybrid_command(
@@ -570,6 +604,7 @@ class Events(commands.Cog):
         boarding_channel="Channel where departure announcements are posted",
         boarding_role="Role to ping in departure announcements",
         support_channel="Support/help channel players should contact if they have issues joining",
+        timezone='IANA timezone for event time entry — e.g. "America/New_York", "Asia/Seoul", "Europe/London"',
     )
     @commands.has_permissions(administrator=True)
     @app_commands.default_permissions(administrator=True)
@@ -579,16 +614,27 @@ class Events(commands.Cog):
         boarding_channel: discord.TextChannel,
         boarding_role: discord.Role,
         support_channel: discord.TextChannel,
+        timezone: str = "UTC",
     ):
+        try:
+            tz = ZoneInfo(timezone)
+            tz_label = datetime.now(tz).strftime("%Z")
+        except (ZoneInfoNotFoundError, KeyError):
+            return await ctx.send(
+                f'`{timezone}` is not a valid timezone. Use an IANA name like `America/New_York`, `Asia/Seoul`, or `Europe/London`.',
+                ephemeral=True,
+            )
+
         async with aiosqlite.connect(DB_PATH) as db:
             await db.execute(
-                """INSERT INTO guild_event_config (guild_id, boarding_channel_id, boarding_role_id, support_channel_id)
-                   VALUES (?, ?, ?, ?)
+                """INSERT INTO guild_event_config (guild_id, boarding_channel_id, boarding_role_id, support_channel_id, server_timezone)
+                   VALUES (?, ?, ?, ?, ?)
                    ON CONFLICT(guild_id) DO UPDATE SET
                        boarding_channel_id = excluded.boarding_channel_id,
                        boarding_role_id    = excluded.boarding_role_id,
-                       support_channel_id  = excluded.support_channel_id""",
-                (ctx.guild.id, boarding_channel.id, boarding_role.id, support_channel.id),
+                       support_channel_id  = excluded.support_channel_id,
+                       server_timezone     = excluded.server_timezone""",
+                (ctx.guild.id, boarding_channel.id, boarding_role.id, support_channel.id, timezone),
             )
             await db.commit()
 
@@ -599,6 +645,7 @@ class Events(commands.Cog):
         embed.add_field(name="Boarding Channel", value=boarding_channel.mention, inline=True)
         embed.add_field(name="Boarding Role", value=boarding_role.mention, inline=True)
         embed.add_field(name="Support Channel", value=support_channel.mention, inline=True)
+        embed.add_field(name="Event Timezone", value=f"{tz_label} (`{timezone}`)", inline=False)
         embed.set_footer(text="These settings apply to all future departure announcements.")
         await ctx.send(embed=embed, ephemeral=True)
 
