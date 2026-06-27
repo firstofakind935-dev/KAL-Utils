@@ -159,19 +159,19 @@ class Events(commands.Cog):
             gate_text = event.channel.mention
 
         embed = discord.Embed(
-            title="✈️ Boarding Call — Gate Now Open",
+            title="✈️ Gate Assignment — Your Gate Is Now Confirmed",
             description=(
-                f"This is your boarding call for **{event.name}**.\n\n"
+                f"Your gate for **{event.name}** has been assigned.\n\n"
                 f"Departure is in **{time_label}**. "
-                f"Please make your way to the gate now.\n\n"
-                f"[**→ Join the event**]({event_url})"
+                f"Please join your gate at departure time.\n\n"
+                f"[**→ View event**]({event_url})"
             ),
             color=discord.Color(0x00A4E4),
             timestamp=event.start_time,
         )
 
         embed.add_field(
-            name="Boarding Time",
+            name="Departure Time",
             value=f"<t:{int(event.start_time.timestamp())}:F>",
             inline=True,
         )
