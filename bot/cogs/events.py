@@ -10,7 +10,7 @@ AnyVoiceChannel = Union[discord.VoiceChannel, discord.StageChannel]
 
 from db.database import DB_PATH
 
-GATE_ANNOUNCE_MINUTES = 70   # gate is always revealed exactly 70 min before
+GATE_ANNOUNCE_MINUTES = 60   # gate is always revealed exactly 60 min before
 
 FORMATS = [
     "%d/%m/%Y %H:%M",
@@ -256,7 +256,7 @@ class Events(commands.Cog):
             desc_parts.append(f"🕐 Flight time: {flight_time}")
         if cabin_classes:
             desc_parts.append(f"💺 Cabins: {cabin_classes}")
-        desc_parts.append("🚪 Gate announced 70 minutes before departure.")
+        desc_parts.append("🚪 Gate announced 60 minutes before departure.")
         description = "\n".join(desc_parts)
 
         try:
@@ -300,7 +300,7 @@ class Events(commands.Cog):
             embed.add_field(name="Flight Time", value=flight_time, inline=True)
         if cabin_classes:
             embed.add_field(name="Cabin Classes", value=cabin_classes, inline=True)
-        embed.set_footer(text="Gate will be announced to interested members 70 minutes before departure.")
+        embed.set_footer(text="Gate will be announced to interested members 60 minutes before departure.")
 
         await ctx.send(embed=embed, ephemeral=True)
 
@@ -337,7 +337,7 @@ class Events(commands.Cog):
         if len(upcoming) > 10:
             embed.set_footer(text=f"Showing 10 of {len(upcoming)} events")
         else:
-            embed.set_footer(text="Gate announced to interested members 70 min before departure")
+            embed.set_footer(text="Gate announced to interested members 60 min before departure")
 
         await ctx.send(embed=embed)
 
