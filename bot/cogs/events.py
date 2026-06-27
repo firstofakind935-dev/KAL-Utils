@@ -1,5 +1,5 @@
 from datetime import datetime, timedelta, timezone
-from typing import Union
+from typing import Optional, Union
 
 import aiosqlite
 import discord
@@ -10,7 +10,7 @@ AnyVoiceChannel = Union[discord.VoiceChannel, discord.StageChannel]
 
 from db.database import DB_PATH
 
-DEFAULT_REMINDER_MINUTES = 60
+GATE_ANNOUNCE_MINUTES = 70   # gate is always revealed exactly 70 min before
 
 FORMATS = [
     "%d/%m/%Y %H:%M",
@@ -42,9 +42,15 @@ class Events(commands.Cog):
     async def cog_load(self):
         async with aiosqlite.connect(DB_PATH) as db:
             await db.execute("""
-                CREATE TABLE IF NOT EXISTS event_reminder_config (
-                    guild_id         INTEGER PRIMARY KEY,
-                    reminder_minutes INTEGER NOT NULL DEFAULT 30
+                CREATE TABLE IF NOT EXISTS event_details (
+                    event_id        TEXT    NOT NULL,
+                    guild_id        INTEGER NOT NULL,
+                    gate_channel_id INTEGER NOT NULL,
+                    departure       TEXT,
+                    arrival         TEXT,
+                    flight_time     TEXT,
+                    cabin_classes   TEXT,
+                    PRIMARY KEY (event_id, guild_id)
                 )
             """)
             await db.execute("""
@@ -60,16 +66,25 @@ class Events(commands.Cog):
     async def cog_unload(self):
         self._reminder_loop.cancel()
 
-    # ── DB helpers ───────────────────────────────────────────────────────────
+    # ── DB helpers ────────────────────────────────────────────────────────────
 
-    async def _get_reminder_minutes(self, guild_id: int) -> int:
+    async def _get_event_details(self, guild_id: int, event_id: str) -> Optional[dict]:
         async with aiosqlite.connect(DB_PATH) as db:
             async with db.execute(
-                "SELECT reminder_minutes FROM event_reminder_config WHERE guild_id = ?",
-                (guild_id,),
+                """SELECT gate_channel_id, departure, arrival, flight_time, cabin_classes
+                   FROM event_details WHERE event_id = ? AND guild_id = ?""",
+                (event_id, guild_id),
             ) as cur:
                 row = await cur.fetchone()
-        return row[0] if row else DEFAULT_REMINDER_MINUTES
+        if not row:
+            return None
+        return {
+            "gate_channel_id": row[0],
+            "departure":       row[1],
+            "arrival":         row[2],
+            "flight_time":     row[3],
+            "cabin_classes":   row[4],
+        }
 
     async def _already_reminded(self, guild_id: int, event_id: str) -> bool:
         async with aiosqlite.connect(DB_PATH) as db:
@@ -102,9 +117,8 @@ class Events(commands.Cog):
         await self.bot.wait_until_ready()
 
     async def _check_guild_events(self, guild: discord.Guild):
-        reminder_minutes = await self._get_reminder_minutes(guild.id)
         now = datetime.now(timezone.utc)
-        window_end = now + timedelta(minutes=reminder_minutes)
+        window_end = now + timedelta(minutes=GATE_ANNOUNCE_MINUTES)
 
         events = await guild.fetch_scheduled_events()
         for event in events:
@@ -115,11 +129,10 @@ class Events(commands.Cog):
             if await self._already_reminded(guild.id, str(event.id)):
                 continue
 
-            # Mark before sending to prevent duplicate runs if the loop fires twice
             await self._mark_reminded(guild.id, str(event.id))
-            await self._send_reminders(guild, event, reminder_minutes)
+            await self._send_reminders(guild, event)
 
-    async def _send_reminders(self, guild: discord.Guild, event: discord.ScheduledEvent, reminder_minutes: int):
+    async def _send_reminders(self, guild: discord.Guild, event: discord.ScheduledEvent):
         try:
             data = await self.bot.http.get_scheduled_event_users(
                 guild.id, event.id, limit=100, with_member=False,
@@ -131,12 +144,22 @@ class Events(commands.Cog):
         if not data:
             return
 
+        details = await self._get_event_details(guild.id, str(event.id))
+
         minutes_away = int((event.start_time - datetime.now(timezone.utc)).total_seconds() / 60)
         time_label = f"{minutes_away} minute{'s' if minutes_away != 1 else ''}"
         event_url = f"https://discord.com/events/{guild.id}/{event.id}"
 
+        # Resolve gate channel from stored details (preferred) or from event itself
+        gate_text = None
+        if details and details["gate_channel_id"]:
+            gate_ch = guild.get_channel(details["gate_channel_id"])
+            gate_text = gate_ch.mention if gate_ch else f"<#{details['gate_channel_id']}>"
+        elif event.channel:
+            gate_text = event.channel.mention
+
         embed = discord.Embed(
-            title="✈️ Boarding Call — All Passengers Please Proceed",
+            title="✈️ Boarding Call — Gate Now Open",
             description=(
                 f"This is your boarding call for **{event.name}**.\n\n"
                 f"Departure is in **{time_label}**. "
@@ -146,17 +169,27 @@ class Events(commands.Cog):
             color=discord.Color(0x00A4E4),
             timestamp=event.start_time,
         )
+
         embed.add_field(
-            name="Departure",
+            name="Boarding Time",
             value=f"<t:{int(event.start_time.timestamp())}:F>",
             inline=True,
         )
-        if event.location:
-            embed.add_field(name="Gate", value=event.location, inline=True)
-        elif event.channel:
-            embed.add_field(name="Gate", value=event.channel.name, inline=True)
-        if event.description:
-            embed.add_field(name="Flight Details", value=event.description[:500], inline=False)
+        if gate_text:
+            embed.add_field(name="Gate", value=gate_text, inline=True)
+
+        if details:
+            if details["departure"] and details["arrival"]:
+                embed.add_field(
+                    name="Route",
+                    value=f"{details['departure']} → {details['arrival']}",
+                    inline=False,
+                )
+            if details["flight_time"]:
+                embed.add_field(name="Flight Time", value=details["flight_time"], inline=True)
+            if details["cabin_classes"]:
+                embed.add_field(name="Cabin Classes", value=details["cabin_classes"], inline=True)
+
         embed.set_footer(text="Korean Air PTFS • You're receiving this because you marked yourself as interested.")
 
         sent = 0
@@ -171,41 +204,19 @@ class Events(commands.Cog):
             except Exception:
                 failed += 1
 
-        print(f"[Events] Reminder for '{event.name}' in {guild.name}: {sent} sent, {failed} failed")
+        print(f"[Events] Boarding call for '{event.name}' in {guild.name}: {sent} sent, {failed} failed")
 
     # ── Commands ──────────────────────────────────────────────────────────────
-
-    @commands.hybrid_command(
-        name="seteventreminder",
-        description="[Admin] Set how many minutes before an event to DM interested members",
-    )
-    @app_commands.describe(minutes="Minutes before the event to send the reminder (e.g. 30, 60)")
-    @commands.has_permissions(administrator=True)
-    @app_commands.default_permissions(administrator=True)
-    async def seteventreminder(self, ctx: commands.Context, minutes: int):
-        if minutes < 5:
-            return await ctx.send("Minimum reminder time is 5 minutes.", ephemeral=True)
-        if minutes > 1440:
-            return await ctx.send("Maximum reminder time is 1440 minutes (24 hours).", ephemeral=True)
-
-        async with aiosqlite.connect(DB_PATH) as db:
-            await db.execute(
-                """INSERT INTO event_reminder_config (guild_id, reminder_minutes) VALUES (?, ?)
-                   ON CONFLICT(guild_id) DO UPDATE SET reminder_minutes = excluded.reminder_minutes""",
-                (ctx.guild.id, minutes),
-            )
-            await db.commit()
-
-        await ctx.send(
-            f"Event reminders will be sent **{minutes} minute{'s' if minutes != 1 else ''}** before each event starts.",
-            ephemeral=True,
-        )
 
     @commands.hybrid_command(name="createevent", description="Create a new scheduled event in this server")
     @app_commands.describe(
         name="Event name",
         when='Date and time in UTC — e.g. "25/12 20:00" or "25/12/2026 20:00"',
-        gate="The voice or stage channel where the event takes place",
+        gate="Voice or stage channel — kept secret until the boarding call 70 min before",
+        departure="Departure location (e.g. ICN — Seoul Incheon)",
+        arrival="Arrival location (e.g. LAX — Los Angeles)",
+        flight_time="Estimated flight time (e.g. 10h 30m)",
+        cabin_classes="Available cabin classes (e.g. First · Prestige · Economy)",
         duration="Duration in minutes (default: 60)",
     )
     @commands.has_permissions(administrator=True)
@@ -216,22 +227,37 @@ class Events(commands.Cog):
         name: str,
         when: str,
         gate: AnyVoiceChannel,
+        departure: Optional[str] = None,
+        arrival: Optional[str] = None,
+        flight_time: Optional[str] = None,
+        cabin_classes: Optional[str] = None,
         duration: int = 60,
     ):
-        await ctx.defer()
+        await ctx.defer(ephemeral=True)
 
         try:
             start = parse_when(when)
         except ValueError:
             return await ctx.send(
-                'Invalid date/time. Examples: `25/12 20:00` · `25/12/2026 20:00` · `2026-12-25 20:00`'
+                'Invalid date/time. Examples: `25/12 20:00` · `25/12/2026 20:00` · `2026-12-25 20:00`',
+                ephemeral=True,
             )
 
         if start < datetime.now(timezone.utc):
-            return await ctx.send("Start time must be in the future.")
+            return await ctx.send("Start time must be in the future.", ephemeral=True)
 
         end = start + timedelta(minutes=duration)
-        entity_type = 1 if isinstance(gate, discord.StageChannel) else 2
+
+        # Build description from flight details — gate is NOT included here
+        desc_parts = []
+        if departure and arrival:
+            desc_parts.append(f"✈️ {departure} → {arrival}")
+        if flight_time:
+            desc_parts.append(f"🕐 Flight time: {flight_time}")
+        if cabin_classes:
+            desc_parts.append(f"💺 Cabins: {cabin_classes}")
+        desc_parts.append("🚪 Gate announced 70 minutes before departure.")
+        description = "\n".join(desc_parts)
 
         try:
             data = await ctx.bot.http.create_guild_scheduled_event(
@@ -240,24 +266,43 @@ class Events(commands.Cog):
                 privacy_level=2,
                 scheduled_start_time=start.isoformat(),
                 scheduled_end_time=end.isoformat(),
-                entity_type=entity_type,
-                channel_id=gate.id,
+                entity_type=3,
+                entity_metadata={"location": f"{departure} → {arrival}" if (departure and arrival) else "See event details"},
+                description=description,
             )
         except discord.Forbidden:
-            return await ctx.send("I don't have permission to create events.")
+            return await ctx.send("I don't have permission to create events.", ephemeral=True)
         except Exception as e:
-            return await ctx.send(f"Failed to create event: `{e}`")
+            return await ctx.send(f"Failed to create event: `{e}`", ephemeral=True)
+
+        event_id = str(data["id"])
+
+        async with aiosqlite.connect(DB_PATH) as db:
+            await db.execute(
+                """INSERT INTO event_details
+                   (event_id, guild_id, gate_channel_id, departure, arrival, flight_time, cabin_classes)
+                   VALUES (?, ?, ?, ?, ?, ?, ?)""",
+                (event_id, ctx.guild.id, gate.id, departure, arrival, flight_time, cabin_classes),
+            )
+            await db.commit()
 
         embed = discord.Embed(
             title="✅ Event Created",
             description=f"**{data['name']}**",
             color=discord.Color(0x00A4E4),
         )
-        embed.add_field(name="Start", value=f"<t:{int(start.timestamp())}:F>", inline=True)
+        embed.add_field(name="Departure", value=f"<t:{int(start.timestamp())}:F>", inline=True)
         embed.add_field(name="Duration", value=f"{duration} min", inline=True)
-        embed.add_field(name="Gate", value=gate.mention, inline=True)
+        embed.add_field(name="Gate (hidden)", value=gate.mention, inline=True)
+        if departure and arrival:
+            embed.add_field(name="Route", value=f"{departure} → {arrival}", inline=False)
+        if flight_time:
+            embed.add_field(name="Flight Time", value=flight_time, inline=True)
+        if cabin_classes:
+            embed.add_field(name="Cabin Classes", value=cabin_classes, inline=True)
+        embed.set_footer(text="Gate will be announced to interested members 70 minutes before departure.")
 
-        await ctx.send(embed=embed)
+        await ctx.send(embed=embed, ephemeral=True)
 
     @commands.hybrid_command(name="events", description="List all upcoming scheduled events in this server")
     async def events(self, ctx: commands.Context):
@@ -272,27 +317,18 @@ class Events(commands.Cog):
         if not upcoming:
             return await ctx.send("No upcoming events scheduled.")
 
-        reminder_minutes = await self._get_reminder_minutes(ctx.guild.id)
-
         embed = discord.Embed(
             title=f"📅 Upcoming Events — {ctx.guild.name}",
             color=discord.Color(0x00A4E4),
         )
 
         for event in upcoming[:10]:
-            location = ""
-            if event.channel:
-                location = f" • {event.channel.name}"
-            elif event.location:
-                location = f" • {event.location}"
-
             interested = event.user_count or 0
             embed.add_field(
                 name=event.name,
                 value=(
                     f"<t:{int(event.start_time.timestamp())}:F>\n"
-                    f"{event.description or ''}"
-                    f"{location}\n"
+                    f"{event.description or ''}\n"
                     f"👥 {interested} interested"
                 ).strip(),
                 inline=False,
@@ -300,7 +336,8 @@ class Events(commands.Cog):
 
         if len(upcoming) > 10:
             embed.set_footer(text=f"Showing 10 of {len(upcoming)} events")
-        embed.set_footer(text=f"Boarding calls sent {reminder_minutes} min before departure")
+        else:
+            embed.set_footer(text="Gate announced to interested members 70 min before departure")
 
         await ctx.send(embed=embed)
 
