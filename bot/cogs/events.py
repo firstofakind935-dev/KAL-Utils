@@ -36,49 +36,34 @@ def parse_when(when: str) -> datetime:
 
 
 class CreateEventModal(discord.ui.Modal, title="✈️ Create New Flight Event"):
-    event_name = discord.ui.TextInput(
-        label="Flight Name",
-        placeholder="e.g. KE3348",
-        max_length=100,
-    )
-    when = discord.ui.TextInput(
-        label="Date & Time (UTC)",
-        placeholder="e.g. 25/12/2026 20:00  or  2026-12-25 20:00",
-        max_length=25,
-    )
-    gate_input = discord.ui.TextInput(
-        label="In-Game Gate (revealed 60 min before)",
-        placeholder="e.g. Terminal 1, Gate B3",
-        required=False,
-        max_length=100,
-    )
-    route_details = discord.ui.TextInput(
-        label="Route & Details",
-        placeholder="ICN → LAX | 10h 30m | First · Prestige · Economy",
-        required=False,
-        max_length=300,
-        style=discord.TextStyle.short,
-    )
-    server_link = discord.ui.TextInput(
-        label="Server Link (sent at departure)",
-        placeholder="https://www.roblox.com/share?code=...",
-        required=False,
-        max_length=500,
-    )
-
-    def __init__(self, channel: AnyVoiceChannel, duration: int):
+    def __init__(self, channel: AnyVoiceChannel, duration: int, server_link: Optional[str]):
         super().__init__()
+        today = datetime.now(timezone.utc).strftime("%d/%m/%Y")
+
+        self.event_name = discord.ui.TextInput(label="Flight Name", placeholder="e.g. KE3348", max_length=100)
+        self.start_date = discord.ui.TextInput(label="Start Date (DD/MM/YYYY)", default=today, max_length=12)
+        self.start_time = discord.ui.TextInput(label="Start Time (UTC  —  HH:MM)", default="20:00", max_length=5)
+        self.gate_input = discord.ui.TextInput(label="In-Game Gate (revealed 60 min before)", placeholder="e.g. Terminal 1, Gate B3", required=False, max_length=100)
+        self.route_details = discord.ui.TextInput(label="Route & Details", placeholder="ICN → LAX | 10h 30m | First · Prestige · Economy", required=False, max_length=300)
+
+        self.add_item(self.event_name)
+        self.add_item(self.start_date)
+        self.add_item(self.start_time)
+        self.add_item(self.gate_input)
+        self.add_item(self.route_details)
+
         self.channel = channel
         self.duration = duration
+        self._server_link = server_link
 
     async def on_submit(self, interaction: discord.Interaction):
         await interaction.response.defer(ephemeral=True)
 
         try:
-            start = parse_when(self.when.value)
+            start = parse_when(f"{self.start_date.value.strip()} {self.start_time.value.strip()}")
         except ValueError:
             return await interaction.followup.send(
-                'Invalid date/time. Examples: `25/12 20:00` · `25/12/2026 20:00` · `2026-12-25 20:00`',
+                'Invalid date or time. Date example: `27/06/2026`. Time example: `20:00`',
                 ephemeral=True,
             )
 
@@ -102,7 +87,7 @@ class CreateEventModal(discord.ui.Modal, title="✈️ Create New Flight Event")
             if len(parts) > 2 and parts[2]:
                 cabin_classes = parts[2]
 
-        server_link = self.server_link.value.strip() or None
+        server_link = self._server_link
 
         desc_parts = []
         if departure and arrival:
@@ -510,6 +495,7 @@ class Events(commands.Cog):
     @commands.hybrid_command(name="createevent", description="Create a new scheduled event in this server")
     @app_commands.describe(
         channel="Voice or stage channel where pilots and hosts will speak",
+        server_link="Roblox private server link (sent to interested members at departure)",
         duration="Duration in minutes (default: 60)",
     )
     @commands.has_permissions(administrator=True)
@@ -518,11 +504,14 @@ class Events(commands.Cog):
         self,
         ctx: commands.Context,
         channel: AnyVoiceChannel,
+        server_link: Optional[str] = None,
         duration: int = 60,
     ):
         if ctx.interaction is None:
             return await ctx.send("Please use this as a slash command: `/createevent`")
-        await ctx.interaction.response.send_modal(CreateEventModal(channel=channel, duration=duration))
+        await ctx.interaction.response.send_modal(
+            CreateEventModal(channel=channel, duration=duration, server_link=server_link)
+        )
 
     @commands.hybrid_command(
         name="testeventreminder",
