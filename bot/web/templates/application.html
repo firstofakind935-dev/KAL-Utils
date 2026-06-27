@@ -42,6 +42,15 @@
 
           <dt class="col-sm-4">Submitted At</dt>
           <dd class="col-sm-8">{{ application.submitted_at or '—' }}</dd>
+
+          <dt class="col-sm-4">Applied Via</dt>
+          <dd class="col-sm-8">
+            {% if application.source %}
+              <span class="badge" style="background:#00A4E4;">{{ application.source }}</span>
+            {% else %}
+              <span class="text-muted">—</span>
+            {% endif %}
+          </dd>
         </dl>
       </div>
     </div>
@@ -86,16 +95,44 @@
 
   </div>{# /left column #}
 
-  {# ── Right column: pending notice ── #}
-  {% if application.status == 'pending' %}
+  {# ── Right column: review action ── #}
   <div class="col-lg-4">
-    <div class="card shadow-sm border-warning">
-      <div class="card-body text-muted small">
-        ⏳ This application is <strong>pending review</strong>. Use the <strong>Approve</strong> and <strong>Reject</strong> buttons on the Discord notification embed to action it.
+    {% if application.status == 'pending' %}
+    <div class="card shadow-sm">
+      <div class="card-header fw-semibold">Review Application</div>
+      <div class="card-body">
+
+        {# Approve #}
+        <form method="post" action="{{ url_for('application_review', app_id=application.id) }}"
+              onsubmit="return confirm('Approve Application #{{ application.id }}? The applicant will be notified by DM.');">
+          <input type="hidden" name="action" value="approve">
+          <button type="submit" class="btn btn-success w-100 mb-3">✅ Approve</button>
+        </form>
+
+        {# Reject #}
+        <form method="post" action="{{ url_for('application_review', app_id=application.id) }}"
+              onsubmit="return confirm('Reject Application #{{ application.id }}? The applicant will be notified by DM.');">
+          <input type="hidden" name="action" value="reject">
+          <div class="mb-2">
+            <label for="reject-reason" class="form-label small fw-semibold">Reason for Denial <span class="text-danger">*</span></label>
+            <textarea id="reject-reason" name="notes" class="form-control form-control-sm" rows="4"
+                      placeholder="Explain why this application is being rejected..." required></textarea>
+          </div>
+          <button type="submit" class="btn btn-danger w-100">❌ Reject</button>
+        </form>
+
+        <p class="text-muted small mt-3 mb-0">The applicant will receive a DM and the decision will be posted to the Discord review channel.</p>
       </div>
     </div>
+    {% else %}
+    <div class="card shadow-sm">
+      <div class="card-header fw-semibold">Review</div>
+      <div class="card-body text-muted small">
+        This application has already been <strong>{{ application.status }}</strong> and cannot be re-reviewed.
+      </div>
+    </div>
+    {% endif %}
   </div>
-  {% endif %}
 
 </div>{# /row #}
 {% endblock %}

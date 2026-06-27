@@ -34,6 +34,7 @@
         <tr>
           <th>#</th>
           <th>Applicant</th>
+          <th>Applied Via</th>
           <th>Roblox Username</th>
           <th>Submitted At</th>
           <th>Status</th>
@@ -46,6 +47,13 @@
           <tr>
             <td class="text-muted small">{{ application.id }}</td>
             <td>{{ application.user_name or '—' }}</td>
+            <td>
+              {% if application.source %}
+                <span class="badge" style="background:#00A4E4;">{{ application.source }}</span>
+              {% else %}
+                <span class="text-muted small">—</span>
+              {% endif %}
+            </td>
             <td class="text-muted small">
               {{ application.answers[0].answer if application.answers else '—' }}
             </td>
@@ -68,7 +76,7 @@
           {% endfor %}
         {% else %}
           <tr>
-            <td colspan="6" class="text-center text-muted py-4">No applications found.</td>
+            <td colspan="7" class="text-center text-muted py-4">No applications found.</td>
           </tr>
         {% endif %}
       </tbody>

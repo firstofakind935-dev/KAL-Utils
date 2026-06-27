@@ -54,14 +54,13 @@ class Welcome(commands.Cog):
         if not config or not config[0]:
             return
 
-        welcome_channel_id, helpdesk_channel_id = config
-        channel = member.guild.get_channel(welcome_channel_id)
-        if not channel:
-            return
-
         welcome_channel_id = config[0]
         helpdesk_channel_id = config[1]
         verify_channel_id = config[2] if len(config) > 2 else None
+
+        channel = member.guild.get_channel(welcome_channel_id)
+        if not channel:
+            return
 
         helpdesk = member.guild.get_channel(helpdesk_channel_id) if helpdesk_channel_id else None
         helpdesk_mention = helpdesk.mention if helpdesk else "#helpdesk"
@@ -72,11 +71,11 @@ class Welcome(commands.Cog):
         member_number = ordinal(member.guild.member_count)
 
         embed = discord.Embed(
-            title="🇰🇷 Welcome!",
+            title="<:Flag:1504848692195365065> Welcome!",
             description=(
-                f"➡️ We're pleased to have you here. Kindly proceed to {verify_mention} "
+                f"<:KE_Arrow:1510682534189731910> We're pleased to have you here. Kindly proceed to {verify_mention} "
                 f"to complete your verification and gain full access.\n\n"
-                f"➡️ If you require any assistance, feel free to reach out at any time at "
+                f"<:KE_Arrow:1510682534189731910> If you require any assistance, feel free to reach out at any time at "
                 f"{helpdesk_mention}."
             ),
             color=discord.Color(0x00A4E4),
@@ -84,7 +83,7 @@ class Welcome(commands.Cog):
         embed.set_image(url=BANNER_URL)
 
         await channel.send(
-            f"🇰🇷 Hwan-yeonghabnida to **Korean Air PTFS** {member.mention}! "
+            f"<:Flag:1504848692195365065> Hwan-yeonghabnida to **Korean Air PTFS** {member.mention}! "
             f"you are our **{member_number}** member",
             embed=embed,
         )
@@ -136,8 +135,12 @@ class Welcome(commands.Cog):
     @app_commands.default_permissions(administrator=True)
     async def testwelcome(self, ctx: commands.Context):
         """Send a test welcome message for the current user."""
-        await self.on_member_join(ctx.author)
-        await ctx.send("Test welcome sent!", ephemeral=True)
+        await ctx.defer(ephemeral=True)
+        try:
+            await self.on_member_join(ctx.author)
+            await ctx.send("Test welcome sent!", ephemeral=True)
+        except Exception as e:
+            await ctx.send(f"Error: `{e}`", ephemeral=True)
 
 
 async def setup(bot: commands.Bot):
