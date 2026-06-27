@@ -73,6 +73,14 @@ class Events(commands.Cog):
                     PRIMARY KEY (guild_id, event_id)
                 )
             """)
+            await db.execute("""
+                CREATE TABLE IF NOT EXISTS guild_event_config (
+                    guild_id            INTEGER PRIMARY KEY,
+                    boarding_channel_id INTEGER,
+                    boarding_role_id    INTEGER,
+                    support_channel_id  INTEGER
+                )
+            """)
             await db.commit()
         self._reminder_loop.start()
 
@@ -131,6 +139,21 @@ class Events(commands.Cog):
                 (guild_id, event_id),
             )
             await db.commit()
+
+    async def _get_guild_event_config(self, guild_id: int) -> Optional[dict]:
+        async with aiosqlite.connect(DB_PATH) as db:
+            async with db.execute(
+                "SELECT boarding_channel_id, boarding_role_id, support_channel_id FROM guild_event_config WHERE guild_id = ?",
+                (guild_id,),
+            ) as cur:
+                row = await cur.fetchone()
+        if not row:
+            return None
+        return {
+            "boarding_channel_id": row[0],
+            "boarding_role_id":    row[1],
+            "support_channel_id":  row[2],
+        }
 
     # ── Reminder task ─────────────────────────────────────────────────────────
 
@@ -245,6 +268,50 @@ class Events(commands.Cog):
         print(f"[Events] Gate assignment DMs for '{event.name}' in {guild.name}: {sent} sent, {failed} failed")
 
     async def _send_boarding(self, guild: discord.Guild, event: discord.ScheduledEvent):
+        details = await self._get_event_details(guild.id, str(event.id))
+        config = await self._get_guild_event_config(guild.id)
+        event_url = f"https://discord.com/events/{guild.id}/{event.id}"
+
+        gate_ch = None
+        gate_text = None
+        if details and details["gate_channel_id"]:
+            gate_ch = guild.get_channel(details["gate_channel_id"])
+            gate_text = gate_ch.mention if gate_ch else f"<#{details['gate_channel_id']}>"
+        elif event.channel:
+            gate_ch = event.channel
+            gate_text = event.channel.mention
+
+        # ── Channel announcement ───────────────────────────────────────────────
+        if config and config["boarding_channel_id"]:
+            boarding_ch = guild.get_channel(config["boarding_channel_id"])
+            if boarding_ch:
+                role_mention = f"<@&{config['boarding_role_id']}>" if config["boarding_role_id"] else ""
+                support_mention = f"<#{config['support_channel_id']}>" if config["support_channel_id"] else ""
+
+                spawn = details["departure"] if details and details["departure"] else "the departure gate"
+                if gate_ch:
+                    spawn = f"{spawn}, {gate_ch.name}"
+
+                server_link_line = ""
+                if details and details.get("server_link"):
+                    server_link_line = f"\n\n[**Server Link**]({details['server_link']})"
+
+                support_line = ""
+                if support_mention:
+                    support_line = f"\n\n🛬 If issues occur upon joining the server, please reach us in {support_mention}"
+
+                announcement = (
+                    f"## ✈️ {event.name} Is now ready for departure\n\n"
+                    f"{role_mention}  {event.name} has begun check-in, please spawn at **{spawn}**"
+                    f"{support_line}"
+                    f"{server_link_line}"
+                )
+                try:
+                    await boarding_ch.send(announcement)
+                except Exception as e:
+                    print(f"[Events] Could not post boarding announcement for '{event.name}': {e}")
+
+        # ── DMs to interested members ──────────────────────────────────────────
         try:
             data = await self.bot.http.get_scheduled_event_users(
                 guild.id, event.id, limit=100, with_member=False,
@@ -255,16 +322,6 @@ class Events(commands.Cog):
 
         if not data:
             return
-
-        details = await self._get_event_details(guild.id, str(event.id))
-        event_url = f"https://discord.com/events/{guild.id}/{event.id}"
-
-        gate_text = None
-        if details and details["gate_channel_id"]:
-            gate_ch = guild.get_channel(details["gate_channel_id"])
-            gate_text = gate_ch.mention if gate_ch else f"<#{details['gate_channel_id']}>"
-        elif event.channel:
-            gate_text = event.channel.mention
 
         embed = discord.Embed(
             title="🛫 Boarding Now — Join Your Gate",
@@ -459,6 +516,43 @@ class Events(commands.Cog):
             await ctx.send("✅ Test DMs sent (gate assignment + boarding) — check your DMs.", ephemeral=True)
         except discord.Forbidden:
             await ctx.send("❌ Couldn't DM you. Enable DMs from server members and try again.", ephemeral=True)
+
+    @commands.hybrid_command(name="eventsetup", description="Configure boarding announcements for this server")
+    @app_commands.describe(
+        boarding_channel="Channel where departure announcements are posted",
+        boarding_role="Role to ping in departure announcements",
+        support_channel="Support/help channel players should contact if they have issues joining",
+    )
+    @commands.has_permissions(administrator=True)
+    @app_commands.default_permissions(administrator=True)
+    async def eventsetup(
+        self,
+        ctx: commands.Context,
+        boarding_channel: discord.TextChannel,
+        boarding_role: discord.Role,
+        support_channel: discord.TextChannel,
+    ):
+        async with aiosqlite.connect(DB_PATH) as db:
+            await db.execute(
+                """INSERT INTO guild_event_config (guild_id, boarding_channel_id, boarding_role_id, support_channel_id)
+                   VALUES (?, ?, ?, ?)
+                   ON CONFLICT(guild_id) DO UPDATE SET
+                       boarding_channel_id = excluded.boarding_channel_id,
+                       boarding_role_id    = excluded.boarding_role_id,
+                       support_channel_id  = excluded.support_channel_id""",
+                (ctx.guild.id, boarding_channel.id, boarding_role.id, support_channel.id),
+            )
+            await db.commit()
+
+        embed = discord.Embed(
+            title="✅ Boarding Config Saved",
+            color=discord.Color(0x00A4E4),
+        )
+        embed.add_field(name="Boarding Channel", value=boarding_channel.mention, inline=True)
+        embed.add_field(name="Boarding Role", value=boarding_role.mention, inline=True)
+        embed.add_field(name="Support Channel", value=support_channel.mention, inline=True)
+        embed.set_footer(text="These settings apply to all future departure announcements.")
+        await ctx.send(embed=embed, ephemeral=True)
 
     @commands.hybrid_command(name="events", description="List all upcoming scheduled events in this server")
     async def events(self, ctx: commands.Context):
