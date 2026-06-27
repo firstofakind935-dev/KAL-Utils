@@ -1,9 +1,12 @@
 from datetime import datetime, timedelta, timezone
+from typing import Union
 
 import aiosqlite
 import discord
 from discord import app_commands
 from discord.ext import commands, tasks
+
+AnyVoiceChannel = Union[discord.VoiceChannel, discord.StageChannel]
 
 from db.database import DB_PATH
 
@@ -202,6 +205,7 @@ class Events(commands.Cog):
     @app_commands.describe(
         name="Event name",
         when='Date and time in UTC — e.g. "25/12 20:00" or "25/12/2026 20:00"',
+        gate="The voice or stage channel where the event takes place",
         duration="Duration in minutes (default: 60)",
     )
     @commands.has_permissions(administrator=True)
@@ -211,6 +215,7 @@ class Events(commands.Cog):
         ctx: commands.Context,
         name: str,
         when: str,
+        gate: AnyVoiceChannel,
         duration: int = 60,
     ):
         await ctx.defer()
@@ -226,6 +231,7 @@ class Events(commands.Cog):
             return await ctx.send("Start time must be in the future.")
 
         end = start + timedelta(minutes=duration)
+        entity_type = 1 if isinstance(gate, discord.StageChannel) else 2
 
         try:
             data = await ctx.bot.http.create_guild_scheduled_event(
@@ -234,8 +240,8 @@ class Events(commands.Cog):
                 privacy_level=2,
                 scheduled_start_time=start.isoformat(),
                 scheduled_end_time=end.isoformat(),
-                entity_type=3,
-                entity_metadata={"location": "TBD"},
+                entity_type=entity_type,
+                channel_id=gate.id,
             )
         except discord.Forbidden:
             return await ctx.send("I don't have permission to create events.")
@@ -249,6 +255,7 @@ class Events(commands.Cog):
         )
         embed.add_field(name="Start", value=f"<t:{int(start.timestamp())}:F>", inline=True)
         embed.add_field(name="Duration", value=f"{duration} min", inline=True)
+        embed.add_field(name="Gate", value=gate.mention, inline=True)
 
         await ctx.send(embed=embed)
 
