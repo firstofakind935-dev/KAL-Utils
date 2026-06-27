@@ -111,10 +111,11 @@ class CreateEventModal(discord.ui.Modal, title="✈️ Create New Flight Event")
             desc_parts.append(f"🕐 Flight time: {flight_time}")
         if cabin_classes:
             desc_parts.append(f"💺 Cabins: {cabin_classes}")
-        desc_parts.append("🚪 Gate announced 60 minutes before departure.")
+        desc_parts.append(f"🚪 Gate: <#{self.gate.id}>")
         description = "\n".join(desc_parts)
 
         guild = interaction.guild
+        entity_type = 1 if isinstance(self.gate, discord.StageChannel) else 2
 
         try:
             data = await interaction.client.http.create_guild_scheduled_event(
@@ -123,8 +124,8 @@ class CreateEventModal(discord.ui.Modal, title="✈️ Create New Flight Event")
                 privacy_level=2,
                 scheduled_start_time=start.isoformat(),
                 scheduled_end_time=end.isoformat(),
-                entity_type=3,
-                entity_metadata={"location": f"{departure} → {arrival}" if (departure and arrival) else "See event details"},
+                entity_type=entity_type,
+                channel_id=self.gate.id,
                 description=description,
             )
         except discord.Forbidden:
