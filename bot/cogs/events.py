@@ -46,17 +46,18 @@ class CreateEventModal(discord.ui.Modal, title="✈️ Create New Flight Event")
         placeholder="e.g. 25/12/2026 20:00  or  2026-12-25 20:00",
         max_length=25,
     )
-    route = discord.ui.TextInput(
-        label="Route  (Departure → Arrival)",
-        placeholder="e.g. ICN → LAX",
+    gate_input = discord.ui.TextInput(
+        label="In-Game Gate (revealed 60 min before)",
+        placeholder="e.g. Terminal 1, Gate B3",
         required=False,
-        max_length=200,
+        max_length=100,
     )
-    flight_info = discord.ui.TextInput(
-        label="Flight Time  |  Cabin Classes",
-        placeholder="e.g. 10h 30m | First · Prestige · Economy",
+    route_details = discord.ui.TextInput(
+        label="Route & Details",
+        placeholder="ICN → LAX | 10h 30m | First · Prestige · Economy",
         required=False,
-        max_length=200,
+        max_length=300,
+        style=discord.TextStyle.short,
     )
     server_link = discord.ui.TextInput(
         label="Server Link (sent at departure)",
@@ -65,9 +66,9 @@ class CreateEventModal(discord.ui.Modal, title="✈️ Create New Flight Event")
         max_length=500,
     )
 
-    def __init__(self, gate: AnyVoiceChannel, duration: int):
+    def __init__(self, channel: AnyVoiceChannel, duration: int):
         super().__init__()
-        self.gate = gate
+        self.channel = channel
         self.duration = duration
 
     async def on_submit(self, interaction: discord.Interaction):
@@ -86,19 +87,20 @@ class CreateEventModal(discord.ui.Modal, title="✈️ Create New Flight Event")
 
         end = start + timedelta(minutes=self.duration)
 
-        departure = arrival = None
-        if self.route.value.strip():
-            parts = self.route.value.split("→", 1)
-            if len(parts) == 2:
-                departure, arrival = parts[0].strip(), parts[1].strip()
-            else:
-                departure = self.route.value.strip()
+        gate_text = self.gate_input.value.strip() or None
 
-        flight_time = cabin_classes = None
-        if self.flight_info.value.strip():
-            parts = self.flight_info.value.split("|", 1)
-            flight_time = parts[0].strip() or None
-            cabin_classes = parts[1].strip() if len(parts) > 1 and parts[1].strip() else None
+        # Parse "ICN → LAX | 10h 30m | First · Prestige · Economy"
+        departure = arrival = flight_time = cabin_classes = None
+        if self.route_details.value.strip():
+            parts = [p.strip() for p in self.route_details.value.split("|")]
+            if parts[0]:
+                route_parts = parts[0].split("→", 1)
+                departure = route_parts[0].strip() or None
+                arrival = route_parts[1].strip() if len(route_parts) > 1 else None
+            if len(parts) > 1 and parts[1]:
+                flight_time = parts[1]
+            if len(parts) > 2 and parts[2]:
+                cabin_classes = parts[2]
 
         server_link = self.server_link.value.strip() or None
 
@@ -111,11 +113,11 @@ class CreateEventModal(discord.ui.Modal, title="✈️ Create New Flight Event")
             desc_parts.append(f"🕐 Flight time: {flight_time}")
         if cabin_classes:
             desc_parts.append(f"💺 Cabins: {cabin_classes}")
-        desc_parts.append(f"🚪 Gate: <#{self.gate.id}>")
+        desc_parts.append("🚪 Gate announced 60 minutes before departure.")
         description = "\n".join(desc_parts)
 
         guild = interaction.guild
-        entity_type = 1 if isinstance(self.gate, discord.StageChannel) else 2
+        entity_type = 1 if isinstance(self.channel, discord.StageChannel) else 2
 
         try:
             data = await interaction.client.http.create_guild_scheduled_event(
@@ -125,7 +127,7 @@ class CreateEventModal(discord.ui.Modal, title="✈️ Create New Flight Event")
                 scheduled_start_time=start.isoformat(),
                 scheduled_end_time=end.isoformat(),
                 entity_type=entity_type,
-                channel_id=self.gate.id,
+                channel_id=self.channel.id,
                 description=description,
             )
         except discord.Forbidden:
@@ -138,9 +140,9 @@ class CreateEventModal(discord.ui.Modal, title="✈️ Create New Flight Event")
         async with aiosqlite.connect(DB_PATH) as db:
             await db.execute(
                 """INSERT INTO event_details
-                   (event_id, guild_id, gate_channel_id, departure, arrival, flight_time, cabin_classes, server_link)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
-                (event_id, guild.id, self.gate.id, departure, arrival, flight_time, cabin_classes, server_link),
+                   (event_id, guild_id, gate_channel_id, gate_text, departure, arrival, flight_time, cabin_classes, server_link)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                (event_id, guild.id, 0, gate_text, departure, arrival, flight_time, cabin_classes, server_link),
             )
             await db.commit()
 
@@ -151,7 +153,9 @@ class CreateEventModal(discord.ui.Modal, title="✈️ Create New Flight Event")
         )
         embed.add_field(name="Departure", value=f"<t:{int(start.timestamp())}:F>", inline=True)
         embed.add_field(name="Duration", value=f"{self.duration} min", inline=True)
-        embed.add_field(name="Gate (hidden)", value=self.gate.mention, inline=True)
+        embed.add_field(name="Voice Channel", value=self.channel.mention, inline=True)
+        if gate_text:
+            embed.add_field(name="In-Game Gate (hidden)", value=gate_text, inline=False)
         if departure and arrival:
             embed.add_field(name="Route", value=f"{departure} → {arrival}", inline=False)
         if flight_time:
@@ -160,7 +164,7 @@ class CreateEventModal(discord.ui.Modal, title="✈️ Create New Flight Event")
             embed.add_field(name="Cabin Classes", value=cabin_classes, inline=True)
         if server_link:
             embed.add_field(name="Server Link (sent at boarding)", value=server_link, inline=False)
-        embed.set_footer(text="Gate announced 60 min before · Server link sent at departure time.")
+        embed.set_footer(text="Gate revealed in DM 60 min before · Server link sent at departure time.")
 
         await interaction.followup.send(embed=embed, ephemeral=True)
 
@@ -183,7 +187,8 @@ class Events(commands.Cog):
                 CREATE TABLE IF NOT EXISTS event_details (
                     event_id        TEXT    NOT NULL,
                     guild_id        INTEGER NOT NULL,
-                    gate_channel_id INTEGER NOT NULL,
+                    gate_channel_id INTEGER NOT NULL DEFAULT 0,
+                    gate_text       TEXT,
                     departure       TEXT,
                     arrival         TEXT,
                     flight_time     TEXT,
@@ -192,11 +197,11 @@ class Events(commands.Cog):
                     PRIMARY KEY (event_id, guild_id)
                 )
             """)
-            # Migrate existing rows that predate the server_link column
-            try:
-                await db.execute("ALTER TABLE event_details ADD COLUMN server_link TEXT")
-            except Exception:
-                pass
+            for col in ("server_link TEXT", "gate_text TEXT"):
+                try:
+                    await db.execute(f"ALTER TABLE event_details ADD COLUMN {col}")
+                except Exception:
+                    pass
             await db.execute("""
                 CREATE TABLE IF NOT EXISTS event_reminders_sent (
                     guild_id  INTEGER NOT NULL,
@@ -230,7 +235,7 @@ class Events(commands.Cog):
     async def _get_event_details(self, guild_id: int, event_id: str) -> Optional[dict]:
         async with aiosqlite.connect(DB_PATH) as db:
             async with db.execute(
-                """SELECT gate_channel_id, departure, arrival, flight_time, cabin_classes, server_link
+                """SELECT gate_channel_id, gate_text, departure, arrival, flight_time, cabin_classes, server_link
                    FROM event_details WHERE event_id = ? AND guild_id = ?""",
                 (event_id, guild_id),
             ) as cur:
@@ -239,11 +244,12 @@ class Events(commands.Cog):
             return None
         return {
             "gate_channel_id": row[0],
-            "departure":       row[1],
-            "arrival":         row[2],
-            "flight_time":     row[3],
-            "cabin_classes":   row[4],
-            "server_link":     row[5],
+            "gate_text":       row[1],
+            "departure":       row[2],
+            "arrival":         row[3],
+            "flight_time":     row[4],
+            "cabin_classes":   row[5],
+            "server_link":     row[6],
         }
 
     async def _already_reminded(self, guild_id: int, event_id: str) -> bool:
@@ -331,6 +337,16 @@ class Events(commands.Cog):
                         await self._mark_boarded(guild.id, str(event.id))
                         await self._send_boarding(guild, event)
 
+    def _resolve_gate(self, guild: discord.Guild, details: Optional[dict], event: discord.ScheduledEvent) -> Optional[str]:
+        """Return the gate display string: in-game text if set, otherwise legacy channel mention."""
+        if details:
+            if details["gate_text"]:
+                return details["gate_text"]
+            if details["gate_channel_id"]:
+                ch = guild.get_channel(details["gate_channel_id"])
+                return ch.mention if ch else f"<#{details['gate_channel_id']}>"
+        return None
+
     async def _send_reminders(self, guild: discord.Guild, event: discord.ScheduledEvent):
         try:
             data = await self.bot.http.get_scheduled_event_users(
@@ -344,25 +360,18 @@ class Events(commands.Cog):
             return
 
         details = await self._get_event_details(guild.id, str(event.id))
+        gate_display = self._resolve_gate(guild, details, event)
 
         minutes_away = int((event.start_time - datetime.now(timezone.utc)).total_seconds() / 60)
         time_label = f"{minutes_away} minute{'s' if minutes_away != 1 else ''}"
         event_url = f"https://discord.com/events/{guild.id}/{event.id}"
-
-        # Resolve gate channel from stored details (preferred) or from event itself
-        gate_text = None
-        if details and details["gate_channel_id"]:
-            gate_ch = guild.get_channel(details["gate_channel_id"])
-            gate_text = gate_ch.mention if gate_ch else f"<#{details['gate_channel_id']}>"
-        elif event.channel:
-            gate_text = event.channel.mention
 
         embed = discord.Embed(
             title="✈️ Gate Assignment — Your Gate Is Now Confirmed",
             description=(
                 f"Your gate for **{event.name}** has been assigned.\n\n"
                 f"Departure is in **{time_label}**. "
-                f"Please join your gate at departure time.\n\n"
+                f"Please be at your gate at departure time.\n\n"
                 f"[**→ View event**]({event_url})"
             ),
             color=discord.Color(0x00A4E4),
@@ -374,8 +383,8 @@ class Events(commands.Cog):
             value=f"<t:{int(event.start_time.timestamp())}:F>",
             inline=True,
         )
-        if gate_text:
-            embed.add_field(name="Gate", value=gate_text, inline=True)
+        if gate_display:
+            embed.add_field(name="In-Game Gate", value=gate_display, inline=True)
 
         if details:
             if details["departure"] and details["arrival"]:
@@ -409,15 +418,7 @@ class Events(commands.Cog):
         details = await self._get_event_details(guild.id, str(event.id))
         config = await self._get_guild_event_config(guild.id)
         event_url = f"https://discord.com/events/{guild.id}/{event.id}"
-
-        gate_ch = None
-        gate_text = None
-        if details and details["gate_channel_id"]:
-            gate_ch = guild.get_channel(details["gate_channel_id"])
-            gate_text = gate_ch.mention if gate_ch else f"<#{details['gate_channel_id']}>"
-        elif event.channel:
-            gate_ch = event.channel
-            gate_text = event.channel.mention
+        gate_display = self._resolve_gate(guild, details, event)
 
         # ── Channel announcement ───────────────────────────────────────────────
         if config and config["boarding_channel_id"]:
@@ -426,9 +427,12 @@ class Events(commands.Cog):
                 role_mention = f"<@&{config['boarding_role_id']}>" if config["boarding_role_id"] else ""
                 support_mention = f"<#{config['support_channel_id']}>" if config["support_channel_id"] else ""
 
-                spawn = details["departure"] if details and details["departure"] else "the departure gate"
-                if gate_ch:
-                    spawn = f"{spawn}, {gate_ch.name}"
+                spawn_parts = []
+                if details and details["departure"]:
+                    spawn_parts.append(details["departure"])
+                if gate_display:
+                    spawn_parts.append(gate_display)
+                spawn = ", ".join(spawn_parts) if spawn_parts else "the departure gate"
 
                 server_link_line = ""
                 if details and details.get("server_link"):
@@ -465,15 +469,15 @@ class Events(commands.Cog):
             title="🛫 Boarding Now — Join Your Gate",
             description=(
                 f"**{event.name}** is now boarding!\n\n"
-                f"Please join your gate channel now to check in.\n\n"
+                f"Please make your way to your gate now.\n\n"
                 f"[**→ View event**]({event_url})"
             ),
             color=discord.Color(0x00A4E4),
             timestamp=datetime.now(timezone.utc),
         )
 
-        if gate_text:
-            embed.add_field(name="Gate", value=gate_text, inline=True)
+        if gate_display:
+            embed.add_field(name="In-Game Gate", value=gate_display, inline=True)
 
         if details:
             if details.get("server_link"):
@@ -505,7 +509,7 @@ class Events(commands.Cog):
 
     @commands.hybrid_command(name="createevent", description="Create a new scheduled event in this server")
     @app_commands.describe(
-        gate="Voice or stage channel — kept secret until 60 min before departure",
+        channel="Voice or stage channel where pilots and hosts will speak",
         duration="Duration in minutes (default: 60)",
     )
     @commands.has_permissions(administrator=True)
@@ -513,12 +517,12 @@ class Events(commands.Cog):
     async def createevent(
         self,
         ctx: commands.Context,
-        gate: AnyVoiceChannel,
+        channel: AnyVoiceChannel,
         duration: int = 60,
     ):
         if ctx.interaction is None:
             return await ctx.send("Please use this as a slash command: `/createevent`")
-        await ctx.interaction.response.send_modal(CreateEventModal(gate=gate, duration=duration))
+        await ctx.interaction.response.send_modal(CreateEventModal(channel=channel, duration=duration))
 
     @commands.hybrid_command(
         name="testeventreminder",
@@ -536,14 +540,14 @@ class Events(commands.Cog):
             description=(
                 f"Your gate for **TEST FLIGHT KE001** has been assigned.\n\n"
                 f"Departure is in **60 minutes**. "
-                f"Please join your gate at departure time.\n\n"
+                f"Please be at your gate at departure time.\n\n"
                 f"[**→ View event**]({event_url})"
             ),
             color=discord.Color(0x00A4E4),
             timestamp=datetime.now(timezone.utc),
         )
         gate_embed.add_field(name="Departure Time", value=f"<t:{now_ts + 3600}:F>", inline=True)
-        gate_embed.add_field(name="Gate", value="#gate-1 (test)", inline=True)
+        gate_embed.add_field(name="In-Game Gate", value="Terminal 1, Gate B3", inline=True)
         gate_embed.add_field(name="Route", value="ICN → LAX", inline=False)
         gate_embed.add_field(name="Flight Time", value="10h 30m", inline=True)
         gate_embed.add_field(name="Cabin Classes", value="First · Prestige · Economy", inline=True)
@@ -553,13 +557,13 @@ class Events(commands.Cog):
             title="🛫 Boarding Now — Join Your Gate",
             description=(
                 f"**TEST FLIGHT KE001** is now boarding!\n\n"
-                f"Please join your gate channel now to check in.\n\n"
+                f"Please make your way to your gate now.\n\n"
                 f"[**→ View event**]({event_url})"
             ),
             color=discord.Color(0x00A4E4),
             timestamp=datetime.now(timezone.utc),
         )
-        boarding_embed.add_field(name="Gate", value="#gate-1 (test)", inline=True)
+        boarding_embed.add_field(name="In-Game Gate", value="Terminal 1, Gate B3", inline=True)
         if server_link:
             boarding_embed.add_field(name="Server Link", value=server_link, inline=False)
         boarding_embed.add_field(name="Route", value="ICN → LAX", inline=False)
