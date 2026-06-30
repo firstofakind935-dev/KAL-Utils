@@ -90,7 +90,11 @@ class TicketSectionButton(discord.ui.Button):
     async def callback(self, interaction: discord.Interaction):
         guild = interaction.guild
         user  = interaction.user
-        section = self.label
+        config = await get_config(guild.id)
+        if self.custom_id == "ticket:section1":
+            section = config[2] if config else self.label
+        else:
+            section = config[3] if config else self.label
 
         async with aiosqlite.connect(DB_PATH) as db:
             async with db.execute(
