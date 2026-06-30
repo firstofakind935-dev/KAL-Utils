@@ -5,24 +5,13 @@ from discord.ext import commands
 from db.database import DB_PATH
 
 
-SECTION_PROMPTS = {
-    "General Support": "Please describe your issue and a staff member will assist you shortly.",
-    "Partnerships": (
-        "Thank you for your interest in partnering with Korean Air Virtual Airlines!\n\n"
-        "Please provide the following:\n"
-        "• Your organization/group name\n"
-        "• Type of partnership you're seeking\n"
-        "• Any additional details"
-    ),
-}
-
 DEFAULT_PROMPT = "Please describe your request and a staff member will assist you shortly."
 
 
 async def get_config(guild_id: int):
     async with aiosqlite.connect(DB_PATH) as db:
         async with db.execute(
-            "SELECT support_role_id, category_id, section1_label, section2_label FROM ticket_config WHERE guild_id = ?",
+            "SELECT support_role_id, category_id, section1_label, section2_label, section1_prompt, section2_prompt FROM ticket_config WHERE guild_id = ?",
             (guild_id,),
         ) as cur:
             return await cur.fetchone()
@@ -30,8 +19,11 @@ async def get_config(guild_id: int):
 
 async def create_ticket_channel(guild: discord.Guild, user: discord.Member, section: str):
     config = await get_config(guild.id)
-    role_id = config[0] if config else None
-    cat_id  = config[1] if config else None
+    role_id  = config[0] if config else None
+    cat_id   = config[1] if config else None
+    s1_label  = config[2] if config else None
+    s1_prompt = config[4] if config else None
+    s2_prompt = config[5] if config else None
     support_role = guild.get_role(role_id) if role_id else None
     category     = guild.get_channel(cat_id) if cat_id else None
 
@@ -65,7 +57,10 @@ async def create_ticket_channel(guild: discord.Guild, user: discord.Member, sect
         )
         await db.commit()
 
-    prompt = SECTION_PROMPTS.get(section, DEFAULT_PROMPT)
+    if section == s1_label:
+        prompt = s1_prompt or DEFAULT_PROMPT
+    else:
+        prompt = s2_prompt or DEFAULT_PROMPT
     embed = discord.Embed(
         title=f"🎫 {section}",
         description=f"Welcome {user.mention}!\n\n{prompt}\n\nClick **Close Ticket** or use `/closeticket` when resolved.",
@@ -158,6 +153,38 @@ async def close_ticket_channel(channel: discord.TextChannel, closer: discord.Use
     await channel.delete(reason=f"Ticket closed by {closer}")
 
 
+class TicketPromptModal(discord.ui.Modal, title="✏️ Set Ticket Welcome Messages"):
+    def __init__(self, s1_label: str, s2_label: str, s1_prompt: str, s2_prompt: str):
+        super().__init__()
+        self.section1_prompt = discord.ui.TextInput(
+            label=f"{s1_label} — welcome message",
+            style=discord.TextInputStyle.paragraph,
+            default=s1_prompt,
+            placeholder="Message shown when a ticket is opened in this category.",
+            required=False,
+            max_length=1000,
+        )
+        self.section2_prompt = discord.ui.TextInput(
+            label=f"{s2_label} — welcome message",
+            style=discord.TextInputStyle.paragraph,
+            default=s2_prompt,
+            placeholder="Message shown when a ticket is opened in this category.",
+            required=False,
+            max_length=1000,
+        )
+        self.add_item(self.section1_prompt)
+        self.add_item(self.section2_prompt)
+
+    async def on_submit(self, interaction: discord.Interaction):
+        async with aiosqlite.connect(DB_PATH) as db:
+            await db.execute(
+                """UPDATE ticket_config SET section1_prompt = ?, section2_prompt = ? WHERE guild_id = ?""",
+                (self.section1_prompt.value or None, self.section2_prompt.value or None, interaction.guild.id),
+            )
+            await db.commit()
+        await interaction.response.send_message("✅ Ticket welcome messages updated.", ephemeral=True)
+
+
 class Tickets(commands.Cog):
     def __init__(self, bot: commands.Bot):
         self.bot = bot
@@ -170,9 +197,16 @@ class Tickets(commands.Cog):
                     support_role_id INTEGER,
                     category_id     INTEGER,
                     section1_label  TEXT NOT NULL DEFAULT 'General Support',
-                    section2_label  TEXT NOT NULL DEFAULT 'Flight Support'
+                    section2_label  TEXT NOT NULL DEFAULT 'Flight Support',
+                    section1_prompt TEXT,
+                    section2_prompt TEXT
                 )
             """)
+            for col in ("section1_prompt TEXT", "section2_prompt TEXT"):
+                try:
+                    await db.execute(f"ALTER TABLE ticket_config ADD COLUMN {col}")
+                except Exception:
+                    pass
             await db.execute("""
                 CREATE TABLE IF NOT EXISTS tickets (
                     id         INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -252,6 +286,21 @@ class Tickets(commands.Cog):
 
         await ctx.send("Closing ticket...")
         await close_ticket_channel(ctx.channel, ctx.author)
+
+    @commands.hybrid_command(name="setticketprompt", description="[Admin] Set the welcome message shown inside each ticket type")
+    @commands.has_permissions(administrator=True)
+    @app_commands.default_permissions(administrator=True)
+    async def setticketprompt(self, ctx: commands.Context):
+        if ctx.interaction is None:
+            return await ctx.send("Please use this as a slash command: `/setticketprompt`")
+        config = await get_config(ctx.guild.id)
+        s1_label  = config[2] if config else "General Support"
+        s2_label  = config[3] if config else "Partnerships"
+        s1_prompt = config[4] if config else ""
+        s2_prompt = config[5] if config else ""
+        await ctx.interaction.response.send_modal(
+            TicketPromptModal(s1_label, s2_label, s1_prompt or "", s2_prompt or "")
+        )
 
     @commands.hybrid_command(name="addtoticket", description="Add a user to the current ticket")
     @app_commands.describe(user="User to add to this ticket")
