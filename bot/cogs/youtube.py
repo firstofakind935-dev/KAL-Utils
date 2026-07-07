@@ -279,6 +279,7 @@ class GuildPlayer:
         self.text_channel: discord.TextChannel | None = None
         self.downloading: bool = False
         self.skip_requested: bool = False
+        self.autoplay: bool = False
         self.last_video_id: str | None = None
         self.prefetching: bool = False
         self.prefetched_entry: QueueEntry | None = None
@@ -290,6 +291,7 @@ class GuildPlayer:
         self.current = None
         self.downloading = False
         self.skip_requested = True
+        self.autoplay = False
         self.prefetching = False
         if self.prefetched_path:
             try:
@@ -462,7 +464,7 @@ class YouTube(commands.Cog):
 
             if player.queue:
                 next_entry = player.queue[0]
-            elif player.last_video_id:
+            elif player.autoplay and player.last_video_id:
                 related = await self._get_related(player.last_video_id)
                 if not related:
                     return
@@ -493,7 +495,7 @@ class YouTube(commands.Cog):
             return
 
         if not player.queue:
-            if player.last_video_id:
+            if player.autoplay and player.last_video_id:
                 related = await self._get_related(player.last_video_id)
                 if related:
                     player.queue.append(related)
@@ -759,6 +761,13 @@ class YouTube(commands.Cog):
         if entry.uploader:
             embed.add_field(name="Channel", value=entry.uploader)
         await ctx.send(embed=embed)
+
+    @commands.hybrid_command(name="autoplay", description="Toggle autoplay of related songs when queue ends")
+    async def autoplay(self, ctx: commands.Context):
+        player = self.get_player(ctx.guild.id)
+        player.autoplay = not player.autoplay
+        state = "🟢 on" if player.autoplay else "🔴 off"
+        await ctx.send(f"Autoplay {state}.")
 
     @commands.hybrid_command(name="pause", description="Pause the current song")
     async def pause(self, ctx: commands.Context):
