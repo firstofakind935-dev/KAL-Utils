@@ -279,8 +279,10 @@ class GuildPlayer:
         self.text_channel: discord.TextChannel | None = None
         self.downloading: bool = False
         self.skip_requested: bool = False
-        self.autoplay: bool = True
         self.last_video_id: str | None = None
+        self.prefetching: bool = False
+        self.prefetched_entry: QueueEntry | None = None
+        self.prefetched_path: Path | None = None
 
     def stop(self):
         """Clear all state so _advance exits cleanly."""
@@ -288,6 +290,14 @@ class GuildPlayer:
         self.current = None
         self.downloading = False
         self.skip_requested = True
+        self.prefetching = False
+        if self.prefetched_path:
+            try:
+                self.prefetched_path.unlink(missing_ok=True)
+            except Exception:
+                pass
+        self.prefetched_entry = None
+        self.prefetched_path = None
 
 
 class YouTube(commands.Cog):
@@ -440,6 +450,40 @@ class YouTube(commands.Cog):
 
         return None
 
+    async def _prefetch_next(self, guild_id: int):
+        player = self.get_player(guild_id)
+        if player.prefetching:
+            return
+        player.prefetching = True
+        try:
+            await asyncio.sleep(3)  # let skip/stop settle first
+            if player.skip_requested:
+                return
+
+            if player.queue:
+                next_entry = player.queue[0]
+            elif player.last_video_id:
+                related = await self._get_related(player.last_video_id)
+                if not related:
+                    return
+                player.queue.append(related)
+                next_entry = related
+                if player.text_channel:
+                    await player.text_channel.send(f"🔀 Up next (autoplay): **{related.title}**")
+            else:
+                return
+
+            try:
+                stream_url, headers = await self._resolve_stream(next_entry)
+                local_path = await _download_audio(stream_url, headers, next_entry.video_id)
+                player.prefetched_entry = next_entry
+                player.prefetched_path = local_path
+                print(f"[YouTube] Prefetched: '{next_entry.title}'")
+            except Exception as e:
+                print(f"[YouTube] Prefetch failed for '{next_entry.title}': {e}")
+        finally:
+            player.prefetching = False
+
     async def _advance(self, guild_id: int):
         player = self.get_player(guild_id)
         guild = self.bot.get_guild(guild_id)
@@ -449,7 +493,7 @@ class YouTube(commands.Cog):
             return
 
         if not player.queue:
-            if player.autoplay and player.last_video_id:
+            if player.last_video_id:
                 related = await self._get_related(player.last_video_id)
                 if related:
                     player.queue.append(related)
@@ -473,32 +517,42 @@ class YouTube(commands.Cog):
         entry = player.queue.popleft()
         player.current = entry
 
-        try:
-            stream_url, headers = await self._resolve_stream(entry)
-        except Exception as e:
-            print(f"[YouTube] All stream methods failed for '{entry.title}': {e}")
-            if player.text_channel:
-                await player.text_channel.send(f"⚠️ Could not stream **{entry.title}**: `{e}`")
-            await self._advance(guild_id)
-            return
+        # Use prefetched file if available for this entry
+        if (
+            player.prefetched_entry
+            and player.prefetched_entry.video_id == entry.video_id
+            and player.prefetched_path
+            and player.prefetched_path.exists()
+        ):
+            local_path = player.prefetched_path
+            player.prefetched_entry = None
+            player.prefetched_path = None
+            print(f"[YouTube] Using prefetched audio for '{entry.title}'")
+        else:
+            try:
+                stream_url, headers = await self._resolve_stream(entry)
+            except Exception as e:
+                print(f"[YouTube] All stream methods failed for '{entry.title}': {e}")
+                if player.text_channel:
+                    await player.text_channel.send(f"⚠️ Could not stream **{entry.title}**: `{e}`")
+                await self._advance(guild_id)
+                return
 
-        # imageio_ffmpeg's bundled binary crashes (SIGSEGV) on HTTP URLs.
-        # Download via Python first, then play from local file.
-        if player.text_channel:
-            await player.text_channel.send(f"⬇️ Downloading **{entry.title}**...")
-        player.downloading = True
-        player.skip_requested = False
-        try:
-            local_path = await _download_audio(stream_url, headers, entry.video_id)
-        except Exception as e:
-            player.downloading = False
-            print(f"[YouTube] Download failed for '{entry.title}': {e}")
             if player.text_channel:
-                await player.text_channel.send(f"⚠️ Download failed for **{entry.title}**: `{e}`")
-            await self._advance(guild_id)
-            return
-        finally:
-            player.downloading = False
+                await player.text_channel.send(f"⬇️ Downloading **{entry.title}**...")
+            player.downloading = True
+            player.skip_requested = False
+            try:
+                local_path = await _download_audio(stream_url, headers, entry.video_id)
+            except Exception as e:
+                player.downloading = False
+                print(f"[YouTube] Download failed for '{entry.title}': {e}")
+                if player.text_channel:
+                    await player.text_channel.send(f"⚠️ Download failed for **{entry.title}**: `{e}`")
+                await self._advance(guild_id)
+                return
+            finally:
+                player.downloading = False
 
         # Abort if the bot was disconnected or a skip/stop was requested during download
         if player.skip_requested or not vc.is_connected():
@@ -531,6 +585,7 @@ class YouTube(commands.Cog):
             return
 
         player.last_video_id = entry.video_id
+        asyncio.ensure_future(self._prefetch_next(guild_id))
         if player.text_channel:
             await player.text_channel.send(f"🎵 Now playing: **{entry.title}**")
 
@@ -704,13 +759,6 @@ class YouTube(commands.Cog):
         if entry.uploader:
             embed.add_field(name="Channel", value=entry.uploader)
         await ctx.send(embed=embed)
-
-    @commands.hybrid_command(name="autoplay", description="Toggle autoplay of related songs when queue is empty")
-    async def autoplay(self, ctx: commands.Context):
-        player = self.get_player(ctx.guild.id)
-        player.autoplay = not player.autoplay
-        state = "🟢 enabled" if player.autoplay else "🔴 disabled"
-        await ctx.send(f"Autoplay {state}.")
 
     @commands.hybrid_command(name="pause", description="Pause the current song")
     async def pause(self, ctx: commands.Context):
