@@ -306,6 +306,25 @@ class Tickets(commands.Cog):
             TicketPromptModal(s1_label, s2_label, s1_prompt or "", s2_prompt or "")
         )
 
+    @commands.hybrid_command(name="claimticket", description="Claim this ticket as your own to handle it")
+    async def claimticket(self, ctx: commands.Context):
+        async with aiosqlite.connect(DB_PATH) as db:
+            async with db.execute(
+                "SELECT user_id FROM tickets WHERE channel_id = ? AND closed = 0",
+                (ctx.channel.id,),
+            ) as cur:
+                row = await cur.fetchone()
+
+        if not row:
+            return await ctx.send("This is not an open ticket channel.", ephemeral=True)
+
+        embed = discord.Embed(
+            description=f"✋ This ticket has been claimed by {ctx.author.mention}.\nThey will be assisting you shortly.",
+            color=discord.Color(0x00A4E4),
+        )
+        embed.set_author(name=ctx.author.display_name, icon_url=ctx.author.display_avatar.url)
+        await ctx.send(embed=embed)
+
     @commands.hybrid_command(name="addtoticket", description="Add a user to the current ticket")
     @app_commands.describe(user="User to add to this ticket")
     @commands.has_permissions(administrator=True)
