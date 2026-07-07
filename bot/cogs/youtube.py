@@ -1,6 +1,7 @@
 import asyncio
 import base64
 import os
+import random
 import re
 import tempfile
 from collections import deque
@@ -278,6 +279,8 @@ class GuildPlayer:
         self.text_channel: discord.TextChannel | None = None
         self.downloading: bool = False
         self.skip_requested: bool = False
+        self.autoplay: bool = True
+        self.last_video_id: str | None = None
 
     def stop(self):
         """Clear all state so _advance exits cleanly."""
@@ -379,6 +382,64 @@ class YouTube(commands.Cog):
 
         raise RuntimeError(" | ".join(errors))
 
+    async def _get_related(self, video_id: str) -> QueueEntry | None:
+        """Fetch a random related video from Piped or Invidious."""
+        async with aiohttp.ClientSession() as session:
+            # Try Piped first
+            for base in PIPED_INSTANCES:
+                try:
+                    async with session.get(
+                        f"{base}/streams/{video_id}",
+                        timeout=aiohttp.ClientTimeout(total=15),
+                    ) as r:
+                        if r.status != 200:
+                            continue
+                        data = await r.json()
+                    related = [
+                        s for s in data.get("relatedStreams", [])
+                        if s.get("type") == "stream" and s.get("url")
+                    ]
+                    if related:
+                        pick = random.choice(related[:10])
+                        vid = _extract_video_id(pick.get("url", "")) or pick.get("url", "").split("=")[-1]
+                        return QueueEntry(
+                            title=pick.get("title", "Unknown"),
+                            webpage_url=f"https://www.youtube.com/watch?v={vid}",
+                            video_id=vid,
+                            thumbnail=pick.get("thumbnail"),
+                            duration=pick.get("duration"),
+                            uploader=pick.get("uploaderName"),
+                        )
+                except Exception:
+                    continue
+
+            # Fall back to Invidious
+            for base in INVIDIOUS_INSTANCES:
+                try:
+                    async with session.get(
+                        f"{base}/api/v1/videos/{video_id}",
+                        timeout=aiohttp.ClientTimeout(total=15),
+                    ) as r:
+                        if r.status != 200:
+                            continue
+                        data = await r.json()
+                    related = data.get("recommendedVideos", [])
+                    if related:
+                        pick = random.choice(related[:10])
+                        vid = pick.get("videoId", "")
+                        return QueueEntry(
+                            title=pick.get("title", "Unknown"),
+                            webpage_url=f"https://www.youtube.com/watch?v={vid}",
+                            video_id=vid,
+                            thumbnail=next((t["url"] for t in pick.get("videoThumbnails", []) if t.get("url")), None),
+                            duration=pick.get("lengthSeconds"),
+                            uploader=pick.get("author"),
+                        )
+                except Exception:
+                    continue
+
+        return None
+
     async def _advance(self, guild_id: int):
         player = self.get_player(guild_id)
         guild = self.bot.get_guild(guild_id)
@@ -388,14 +449,26 @@ class YouTube(commands.Cog):
             return
 
         if not player.queue:
-            player.current = None
-            for _ in range(60):
-                await asyncio.sleep(5)
-                if player.queue or vc.is_playing() or vc.is_paused():
+            if player.autoplay and player.last_video_id:
+                related = await self._get_related(player.last_video_id)
+                if related:
+                    player.queue.append(related)
+                    if player.text_channel:
+                        await player.text_channel.send(f"🔀 Autoplay: **{related.title}**")
+                else:
+                    player.current = None
+                    if vc.is_connected():
+                        await vc.disconnect()
                     return
-            if vc.is_connected() and not vc.is_playing():
-                await vc.disconnect()
-            return
+            else:
+                player.current = None
+                for _ in range(60):
+                    await asyncio.sleep(5)
+                    if player.queue or vc.is_playing() or vc.is_paused():
+                        return
+                if vc.is_connected() and not vc.is_playing():
+                    await vc.disconnect()
+                return
 
         entry = player.queue.popleft()
         player.current = entry
@@ -457,6 +530,7 @@ class YouTube(commands.Cog):
             asyncio.ensure_future(self._advance(guild_id))
             return
 
+        player.last_video_id = entry.video_id
         if player.text_channel:
             await player.text_channel.send(f"🎵 Now playing: **{entry.title}**")
 
@@ -630,6 +704,13 @@ class YouTube(commands.Cog):
         if entry.uploader:
             embed.add_field(name="Channel", value=entry.uploader)
         await ctx.send(embed=embed)
+
+    @commands.hybrid_command(name="autoplay", description="Toggle autoplay of related songs when queue is empty")
+    async def autoplay(self, ctx: commands.Context):
+        player = self.get_player(ctx.guild.id)
+        player.autoplay = not player.autoplay
+        state = "🟢 enabled" if player.autoplay else "🔴 disabled"
+        await ctx.send(f"Autoplay {state}.")
 
     @commands.hybrid_command(name="pause", description="Pause the current song")
     async def pause(self, ctx: commands.Context):
