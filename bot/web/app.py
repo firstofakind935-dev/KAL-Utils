@@ -81,37 +81,7 @@ def create_app():
         d["summary"] = build_summary(d.get("type", ""), data)
         return d
 
-    # ── Public schedule ───────────────────────────────────────────────────────
-
-    @app.route("/schedule")
-    def schedule():
-        conn = get_db()
-        try:
-            rows = conn.execute(
-                """SELECT data, submitted_by_name FROM flight_plans
-                   WHERE type = 'commercial' AND status = 'approved'
-                   ORDER BY id DESC""",
-            ).fetchall()
-        finally:
-            conn.close()
-
-        flights = []
-        for row in rows:
-            try:
-                data = json.loads(row["data"])
-            except Exception:
-                data = {}
-            flights.append({
-                "flight_number": data.get("flight_number", "—"),
-                "route":         data.get("route", "—"),
-                "aircraft":      data.get("aircraft", "—"),
-                "departure_time": data.get("departure_time", "—"),
-                "submitted_by_name": row["submitted_by_name"],
-            })
-
-        return render_template("schedule.html", flights=flights)
-
-    # ── Auth routes ───────────────────────────────────────────────────────────
+    # ── Auth routes ──────────────────────────────────────────────────────────
 
     @app.route("/login", methods=["GET", "POST"])
     def login():
