@@ -308,6 +308,54 @@ class Warnings(commands.Cog):
         await self._post_embed(log_channel, embed)
         await ctx.send(f"{label} issued for {member.mention}.", ephemeral=True)
 
+    @commands.hybrid_command(name="strike", description="[Admin] Issue a direct strike to a member")
+    @commands.has_permissions(administrator=True)
+    @app_commands.default_permissions(administrator=True)
+    @app_commands.describe(
+        member="The member to strike",
+        reason="Reason for the strike",
+        amount="Duration amount (e.g. 3) — leave blank for permanent",
+        unit="Duration unit — leave blank for permanent",
+    )
+    async def strike(
+        self,
+        ctx: commands.Context,
+        member: discord.Member,
+        reason: str,
+        amount: Optional[int] = None,
+        unit: Optional[Literal["hours", "days", "weeks"]] = None,
+    ):
+        log_channel = await self._get_log_channel(ctx.guild)
+        if not log_channel:
+            return await ctx.send("No warn log channel set. Use `/setwarnlog` first.", ephemeral=True)
+
+        if (amount is None) != (unit is None):
+            return await ctx.send("Provide both `amount` and `unit`, or neither (for permanent).", ephemeral=True)
+
+        expires_at = _parse_expires_at(amount, unit) if (amount is not None and unit is not None) else None
+        now_iso = datetime.now(timezone.utc).isoformat()
+
+        async with aiosqlite.connect(DB_PATH) as db:
+            async with db.execute(
+                "SELECT COUNT(*) FROM strikes WHERE guild_id = ? AND user_id = ?",
+                (ctx.guild.id, member.id),
+            ) as cur:
+                row = await cur.fetchone()
+            next_strike_num = (row[0] if row else 0) + 1
+
+            await db.execute(
+                """INSERT INTO strikes
+                   (guild_id, user_id, strike_number, reason, issued_by, issued_at, triggering_warn_id)
+                   VALUES (?, ?, ?, ?, ?, ?, 0)""",
+                (ctx.guild.id, member.id, next_strike_num, reason, ctx.author.id, now_iso),
+            )
+            await db.commit()
+
+        active_warns = await self._get_active_warn_count(ctx.guild.id, member.id)
+        embed = self._strike_embed(ctx.guild, member, next_strike_num, active_warns, reason, expires_at, ctx.author)
+        await self._post_embed(log_channel, embed)
+        await ctx.send(f"Strike #{next_strike_num} issued for {member.mention}.", ephemeral=True)
+
     @commands.hybrid_command(name="warnings", description="[Admin] View a member's warn/strike history")
     @commands.has_permissions(administrator=True)
     @app_commands.default_permissions(administrator=True)
