@@ -184,7 +184,7 @@ class Tickets(commands.Cog):
                 )
             """)
             await db.execute(
-                "INSERT OR IGNORE INTO sqlite_sequence (name, seq) VALUES ('tickets', 57)"
+                "INSERT OR IGNORE INTO sqlite_sequence (name, seq) VALUES ('tickets', 168)"
             )
             await db.commit()
 
