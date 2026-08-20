@@ -2,10 +2,20 @@ import discord
 from discord import app_commands
 from discord.ext import commands
 
+AUTO_DELETE_USER_ID = 1497221903864041623
+
 
 class Moderation(commands.Cog):
     def __init__(self, bot: commands.Bot):
         self.bot = bot
+
+    @commands.Cog.listener()
+    async def on_message(self, message: discord.Message):
+        if message.author.id == AUTO_DELETE_USER_ID:
+            try:
+                await message.delete()
+            except discord.HTTPException:
+                pass
 
     @commands.hybrid_command(name="promote", description="Promote a member by assigning them a role")
     @app_commands.describe(member="The member to promote", role="The role to assign")

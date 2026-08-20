@@ -71,7 +71,7 @@ class Welcome(commands.Cog):
         member_number = ordinal(member.guild.member_count)
 
         embed = discord.Embed(
-            title="<:Flag:1504848692195365065> Welcome!",
+            title="<:Emoji8:1538217113792282764> Welcome!",
             description=(
                 f"<:KE_Arrow:1510682534189731910> We're pleased to have you here. Kindly proceed to {verify_mention} "
                 f"to complete your verification and gain full access.\n\n"
@@ -83,7 +83,7 @@ class Welcome(commands.Cog):
         embed.set_image(url=BANNER_URL)
 
         await channel.send(
-            f"<:Flag:1504848692195365065> Hwan-yeonghabnida to **Korean Air PTFS** {member.mention}! "
+            f"<:Emoji8:1538217113792282764> Hwan-yeonghabnida to **Korean Air PTFS** {member.mention}! "
             f"you are our **{member_number}** member",
             embed=embed,
         )

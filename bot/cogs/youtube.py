@@ -1,5 +1,6 @@
 import asyncio
 import base64
+import gzip
 import os
 import random
 import re
@@ -84,6 +85,15 @@ async def _download_audio(url: str, req_headers: dict, video_id: str) -> Path:
 
 
 def _setup_cookies() -> str | None:
+    env_gz = os.getenv("YOUTUBE_COOKIES_GZ_B64")
+    if env_gz:
+        try:
+            content = gzip.decompress(base64.b64decode(env_gz)).decode("utf-8")
+            with open(COOKIES_PATH, "w") as f:
+                f.write(content)
+            return COOKIES_PATH
+        except Exception as e:
+            print(f"[YouTube] Failed to decode YOUTUBE_COOKIES_GZ_B64: {e}")
     env_b64 = os.getenv("YOUTUBE_COOKIES_B64")
     if env_b64:
         try:
